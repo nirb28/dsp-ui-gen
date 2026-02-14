@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block head %}
+<style>
+    #messages { scroll-behavior: smooth; }
+    .msg-user { background: {{ cfg.theme.primary_color }}0d; border-left: 3px solid {{ cfg.theme.primary_color }}; }
+    .msg-bot { background: #f1f5f9; border-left: 3px solid #94a3b8; }
+    .typing-dot { animation: typing 1.4s infinite; }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typing { 0%,60%,100% { opacity: 0.3; } 30% { opacity: 1; } }
+    textarea:focus { box-shadow: 0 0 0 3px {{ cfg.theme.primary_color }}33; }
+    .msg-content { white-space: pre-wrap; word-wrap: break-word; }
+    .msg-content p { margin-bottom: 0.5em; }
+    .msg-content code { background: #e2e8f0; padding: 1px 5px; border-radius: 4px; font-size: 0.875em; }
+    .msg-content pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+    .msg-content pre code { background: none; padding: 0; color: inherit; }
+</style>
+{% endblock %}
+{% block body %}
+<div class="h-screen flex flex-col">
+    <!-- Top bar -->
+    <header class="flex-shrink-0 border-b border-slate-200 bg-white">
+        <div class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                {% if cfg.theme.logo_url %}
+                <img src="{{ cfg.theme.logo_url }}" alt="" class="h-7">
+                {% else %}
+                <div class="w-8 h-8 rounded-lg brand-gradient flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+                    </svg>
+                </div>
+                {% endif %}
+                <h1 class="font-semibold text-sm" style="color: {{ cfg.theme.text_color }}">{{ cfg.name }}</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                {% if show_endpoint_selector and endpoints|length > 1 %}
+                <select id="endpoint-select"
+                        class="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-brand-primary">
+                    {% for ep in endpoints %}
+                    <option value="{{ ep }}">{{ ep }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+                <span class="text-xs text-slate-500">{{ username }}</span>
+                <a href="/{{ slug }}/logout"
+                   class="text-xs text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                    </svg>
+                    Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Messages area -->
+    <div id="messages" class="flex-1 overflow-y-auto">
+        <div class="max-w-3xl mx-auto px-4 py-6 space-y-4" id="msg-container">
+            <!-- Welcome message -->
+            <div class="msg-bot rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-full bg-slate-300 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5M14.25 3.104c.251.023.501.05.75.082M19 14.5l-2.47 2.47"/>
+                        </svg>
+                    </div>
+                    <div class="msg-content text-sm text-slate-700">{{ cfg.chat.welcome_message }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="flex-shrink-0 border-t border-slate-200 bg-white">
+        <div class="max-w-3xl mx-auto px-4 py-3">
+            <form id="chat-form" class="flex items-end gap-3">
+                <textarea id="chat-input" rows="1"
+                          class="flex-1 resize-none rounded-xl border border-slate-300 px-4 py-2.5 text-sm
+                                 focus:outline-none focus:border-brand-primary transition-colors"
+                          placeholder="{{ cfg.chat.placeholder }}"
+                          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();document.getElementById('chat-form').requestSubmit()}"
+                          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
+                <button type="submit" id="send-btn"
+                        class="flex-shrink-0 w-10 h-10 rounded-xl brand-gradient text-white flex items-center justify-center
+                               hover:opacity-90 transition-opacity disabled:opacity-50"
+                        title="Send">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7" transform="rotate(45 12 12)"/>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+const SLUG = '{{ slug }}';
+const form = document.getElementById('chat-form');
+const input = document.getElementById('chat-input');
+const container = document.getElementById('msg-container');
+const messagesDiv = document.getElementById('messages');
+const sendBtn = document.getElementById('send-btn');
+
+function escapeHtml(text) {
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+function formatMessage(text) {
+    // Basic markdown-like formatting
+    let html = escapeHtml(text);
+    // Code blocks
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Line breaks
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
+function addMessage(text, isUser) {
+    const div = document.createElement('div');
+    div.className = isUser ? 'msg-user rounded-lg p-4' : 'msg-bot rounded-lg p-4';
+
+    const icon = isUser
+        ? `<svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>`
+        : `<svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5M14.25 3.104c.251.023.501.05.75.082M19 14.5l-2.47 2.47"/></svg>`;
+
+    const iconBg = isUser ? 'brand-gradient' : 'bg-slate-300';
+
+    div.innerHTML = `
+        <div class="flex items-start gap-3">
+            <div class="w-7 h-7 rounded-full ${iconBg} flex items-center justify-center flex-shrink-0 mt-0.5">${icon}</div>
+            <div class="msg-content text-sm ${isUser ? '' : 'text-slate-700'}">${formatMessage(text)}</div>
+        </div>`;
+    container.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    return div;
+}
+
+function showTyping() {
+    const div = document.createElement('div');
+    div.id = 'typing';
+    div.className = 'msg-bot rounded-lg p-4';
+    div.innerHTML = `
+        <div class="flex items-start gap-3">
+            <div class="w-7 h-7 rounded-full bg-slate-300 flex items-center justify-center flex-shrink-0">
+                <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5M14.25 3.104c.251.023.501.05.75.082M19 14.5l-2.47 2.47"/></svg>
+            </div>
+            <div class="flex gap-1 py-2">
+                <span class="typing-dot w-2 h-2 rounded-full bg-slate-400"></span>
+                <span class="typing-dot w-2 h-2 rounded-full bg-slate-400"></span>
+                <span class="typing-dot w-2 h-2 rounded-full bg-slate-400"></span>
+            </div>
+        </div>`;
+    container.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+function removeTyping() {
+    const el = document.getElementById('typing');
+    if (el) el.remove();
+}
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    addMessage(msg, true);
+    input.value = '';
+    input.style.height = 'auto';
+    sendBtn.disabled = true;
+    showTyping();
+
+    const epSelect = document.getElementById('endpoint-select');
+    const endpoint = epSelect ? epSelect.value : 'default';
+
+    try {
+        const resp = await fetch(`/${SLUG}/chat/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: msg, endpoint: endpoint }),
+        });
+        const data = await resp.json();
+        removeTyping();
+        addMessage(data.response || 'No response received.', false);
+    } catch (err) {
+        removeTyping();
+        addMessage('Error: Could not reach the server.', false);
+    } finally {
+        sendBtn.disabled = false;
+        input.focus();
+    }
+});
+
+input.focus();
+</script>
+{% endblock %}

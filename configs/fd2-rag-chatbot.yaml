@@ -1,0 +1,50 @@
+##############################################################################
+# FD2 RAG Chatbot - Connects to Front Door 2 with JWT authentication
+# Authenticates via the JWT service, then queries through FD2 endpoints.
+# Access at: http://localhost:8200/fd2-rag-chatbot/login
+##############################################################################
+name: "Knowledge Assistant"
+description: "AI-powered knowledge base search via Front Door"
+
+theme:
+  primary_color: "#059669"
+  secondary_color: "#047857"
+  accent_color: "#10b981"
+  background_color: "#f0fdf4"
+  text_color: "#1e293b"
+
+auth:
+  type: "jwt_endpoint"
+  endpoint: "http://localhost:8000/auth/login"
+  username_field: "username"
+  password_field: "password"
+  token_response_field: "access_token"
+  session_duration_minutes: 480
+
+chat:
+  system_prompt: "You are a knowledge base assistant. Answer questions using the retrieved context."
+  placeholder: "Search the knowledge base..."
+  welcome_message: "Welcome! I can search our knowledge base for you. What would you like to know?"
+  show_endpoint_selector: true
+  endpoints:
+    - name: "query"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+        use_reranking: true
+      response_field: "response"
+
+    - name: "retrieve"
+      url: "http://localhost:8080/retrieve"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+        top_k: 5
+      response_field: "documents"

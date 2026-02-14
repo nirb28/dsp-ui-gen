@@ -1,0 +1,31 @@
+##############################################################################
+# Simple Chatbot - Local development with simple auth (any credentials work)
+# Access at: http://localhost:8200/simple-chatbot/login
+##############################################################################
+name: "Simple AI Chat"
+description: "A basic chatbot for local development and testing"
+
+theme:
+  primary_color: "#2563eb"
+  secondary_color: "#1e40af"
+  accent_color: "#3b82f6"
+  background_color: "#f8fafc"
+  text_color: "#1e293b"
+
+auth:
+  type: "simple"
+  session_duration_minutes: 480
+
+chat:
+  system_prompt: "You are a helpful AI assistant."
+  placeholder: "Ask me anything..."
+  welcome_message: "Hello! I'm your AI assistant. How can I help you today?"
+  show_endpoint_selector: false
+  endpoints:
+    - name: "default"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+      response_field: "response"

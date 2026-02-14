@@ -1,0 +1,65 @@
+##############################################################################
+# FD2 Multi-Endpoint Chatbot - Multiple FD2 endpoints with JWT auth
+# Shows endpoint selector so user can switch between query modes.
+# Access at: http://localhost:8200/fd2-multi-endpoint/login
+##############################################################################
+name: "AI Research Assistant"
+description: "Multi-mode AI assistant with query expansion and retrieval"
+
+theme:
+  primary_color: "#7c3aed"
+  secondary_color: "#6d28d9"
+  accent_color: "#8b5cf6"
+  background_color: "#faf5ff"
+  text_color: "#1e293b"
+
+auth:
+  type: "jwt_endpoint"
+  endpoint: "http://127.0.0.1:8080/sas2py/auth/token"
+  username_field: "username"
+  password_field: "password"
+  token_response_field: "access_token"
+  session_duration_minutes: 480
+
+chat:
+  system_prompt: "You are a research assistant with access to multiple knowledge sources."
+  placeholder: "Enter your research question..."
+  welcome_message: "Welcome! I'm your research assistant. Select an endpoint above and ask away."
+  show_endpoint_selector: true
+  endpoints:
+    - name: "smart-query"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+        use_reranking: true
+        query_expansion:
+          enabled: true
+          strategy: "fusion"
+          llm_config_name: "groq-llama3"
+          num_queries: 3
+      response_field: "response"
+
+    - name: "basic-query"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+      response_field: "response"
+
+    - name: "retrieve-docs"
+      url: "http://localhost:8080/retrieve"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "default"
+        top_k: 10
+      response_field: "documents"

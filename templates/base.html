@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ cfg.name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    {% if cfg.theme.favicon_url %}
+    <link rel="icon" href="{{ cfg.theme.favicon_url }}">
+    {% endif %}
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            primary: '{{ cfg.theme.primary_color }}',
+                            secondary: '{{ cfg.theme.secondary_color }}',
+                            accent: '{{ cfg.theme.accent_color }}',
+                        }
+                    },
+                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .brand-gradient { background: linear-gradient(135deg, {{ cfg.theme.primary_color }}, {{ cfg.theme.secondary_color }}); }
+        .brand-gradient-text { background: linear-gradient(135deg, {{ cfg.theme.primary_color }}, {{ cfg.theme.accent_color }}); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen" style="background-color: {{ cfg.theme.background_color }}; color: {{ cfg.theme.text_color }};">
+    {% block body %}{% endblock %}
+</body>
+</html>

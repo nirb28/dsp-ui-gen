@@ -1,0 +1,44 @@
+##############################################################################
+# Enterprise Chatbot with LDAP Authentication
+# Demonstrates LDAP-compatible auth flow with corporate branding.
+# Access at: http://localhost:8200/ldap-enterprise-chat/login
+##############################################################################
+name: "Enterprise AI Hub"
+description: "Corporate AI assistant with LDAP single sign-on"
+
+theme:
+  primary_color: "#0f172a"
+  secondary_color: "#1e293b"
+  accent_color: "#3b82f6"
+  background_color: "#f1f5f9"
+  text_color: "#0f172a"
+  logo_url: ""
+
+auth:
+  type: "ldap"
+  endpoint: "http://localhost:8000/auth/ldap"
+  username_field: "uid"
+  password_field: "password"
+  token_response_field: "access_token"
+  extra_fields:
+    domain: "corp.example.com"
+    auth_type: "ldap"
+  session_duration_minutes: 480
+
+chat:
+  system_prompt: "You are a corporate AI assistant. Be professional and concise."
+  placeholder: "How can I assist you today?"
+  welcome_message: "Welcome to Enterprise AI Hub. I'm here to help with your questions."
+  show_endpoint_selector: false
+  endpoints:
+    - name: "default"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      headers:
+        Authorization: "Bearer {{token}}"
+        X-Source: "enterprise-chat"
+      body_template:
+        query: "{{message}}"
+        configuration_name: "enterprise"
+        use_reranking: true
+      response_field: "response"
