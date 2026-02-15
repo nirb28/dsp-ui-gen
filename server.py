@@ -66,10 +66,19 @@ class ChatEndpoint(BaseModel):
     response_field: str = "response"        # field in JSON response containing answer
     response_display: List[ResponseDisplayItem] = []  # optional rich display items
 
+class InputConfig(BaseModel):
+    type: str = "text"                      # text | code | multiline
+    rows: int = 1                           # default rows for textarea
+    max_rows: int = 6                       # max auto-expand rows
+    language: str = ""                      # hint for code mode (python, sas, sql, etc.)
+    label: str = ""                         # optional label above input
+    submit_on_enter: bool = True            # Enter submits (false = Shift+Enter submits)
+
 class ChatConfig(BaseModel):
     system_prompt: str = "You are a helpful AI assistant."
     placeholder: str = "Type your message..."
     welcome_message: str = "Hello! How can I help you today?"
+    input: InputConfig = InputConfig()      # input control configuration
     endpoints: list[ChatEndpoint] = []
     show_endpoint_selector: bool = False    # let user pick endpoint in UI
 
@@ -465,6 +474,65 @@ async def chat_send(request: Request, slug: str):
             return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})
     except httpx.RequestError as e:
         return JSONResponse({"response": f"Could not reach backend: {e}"})
+
+# ---------------------------------------------------------------------------
+# Routes – admin
+# ---------------------------------------------------------------------------
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Admin interface to view, edit, and reload configs."""
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "configs": CONFIGS,
+    })
+
+@app.get("/admin/config/{slug}")
+async def admin_get_config(slug: str):
+    """Return raw YAML content for a config."""
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    if yaml_path.exists():
+        return JSONResponse({"slug": slug, "yaml": yaml_path.read_text(encoding="utf-8"), "source": "file"})
+    # Dynamic config (e.g. manifest tester) – serialize from memory
+    if slug in CONFIGS:
+        cfg = CONFIGS[slug]
+        return JSONResponse({"slug": slug, "yaml": yaml.dump(cfg.model_dump(), default_flow_style=False, sort_keys=False), "source": "dynamic"})
+    raise HTTPException(404, f"Config '{slug}' not found")
+
+@app.put("/admin/config/{slug}")
+async def admin_save_config(slug: str, request: Request):
+    """Save edited YAML content to disk and reload that config."""
+    body = await request.json()
+    yaml_content = body.get("yaml", "")
+    if not yaml_content.strip():
+        raise HTTPException(400, "Empty YAML content")
+    # Validate YAML parses and fits the model
+    try:
+        raw = yaml.safe_load(yaml_content)
+        cfg = AppConfig(**raw)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid config: {e}")
+    # Write to disk
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    yaml_path.write_text(yaml_content, encoding="utf-8")
+    CONFIGS[slug] = cfg
+    logger.info(f"Admin saved config: {slug} -> {cfg.name}")
+    return JSONResponse({"status": "ok", "slug": slug, "name": cfg.name})
+
+@app.post("/admin/config/{slug}/delete")
+async def admin_delete_config(slug: str):
+    """Delete a config file and remove from memory."""
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    if yaml_path.exists():
+        yaml_path.unlink()
+    CONFIGS.pop(slug, None)
+    logger.info(f"Admin deleted config: {slug}")
+    return JSONResponse({"status": "ok"})
+
+@app.post("/admin/reload")
+async def admin_reload():
+    """Reload all configs from disk."""
+    load_configs()
+    return JSONResponse({"status": "ok", "configs": list(CONFIGS.keys())})
 
 # ---------------------------------------------------------------------------
 # Routes – logout

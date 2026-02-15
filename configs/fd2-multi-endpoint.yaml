@@ -28,8 +28,15 @@ auth:
 
 chat:
   system_prompt: "You are a research assistant with access to multiple knowledge sources."
-  placeholder: "Enter your research question..."
+  placeholder: "Paste your SAS code here, or type a question..."
   welcome_message: "Welcome! I'm your research assistant. Select an endpoint above and ask away."
+  input:
+    type: "code"
+    rows: 6
+    max_rows: 15
+    language: "sas"
+    label: "Input"
+    submit_on_enter: false
   show_endpoint_selector: true
   endpoints:
     - name: "smart-query"

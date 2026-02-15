@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - DSP UI Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+        .editor-font { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+        .config-card { transition: all 0.2s; }
+        .config-card:hover { border-color: #3b82f6; }
+        .toast { animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s; }
+        @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+        .editor-area { tab-size: 2; line-height: 1.6; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-file { background: #22c55e; }
+        .status-dynamic { background: #f59e0b; }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-900 text-white">
+    <!-- Toast container -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <!-- Header -->
+    <header class="border-b border-slate-700 bg-slate-800/80 backdrop-blur sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <a href="/" class="text-slate-400 hover:text-white transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                </a>
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    <h1 class="font-semibold text-sm">Config Admin</h1>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="config-count" class="text-xs text-slate-400"></span>
+                <button onclick="reloadAll()"
+                        class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Reload All
+                </button>
+                <button onclick="showNewConfigModal()"
+                        class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    New Config
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main layout: sidebar + editor -->
+    <div class="max-w-7xl mx-auto flex" style="height: calc(100vh - 56px);">
+        <!-- Sidebar: config list -->
+        <aside id="sidebar" class="w-72 flex-shrink-0 border-r border-slate-700 overflow-y-auto p-4 space-y-2">
+            {% for slug, cfg in configs.items() %}
+            <div class="config-card rounded-lg border border-slate-700 bg-slate-800 p-3 cursor-pointer"
+                 data-slug="{{ slug }}" onclick="loadConfig('{{ slug }}')">
+                <div class="flex items-center gap-2 mb-1">
+                    <div class="status-dot status-file" title="File-based config"></div>
+                    <span class="font-medium text-sm truncate">{{ cfg.name }}</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                    <span class="px-1.5 py-0.5 rounded bg-slate-700">{{ slug }}</span>
+                    <span>{{ cfg.chat.endpoints|length }} ep</span>
+                    <span>{{ cfg.auth.type }}</span>
+                </div>
+            </div>
+            {% endfor %}
+            {% if not configs %}
+            <div class="text-center text-slate-500 text-sm py-8">No configs loaded</div>
+            {% endif %}
+        </aside>
+
+        <!-- Editor panel -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Editor toolbar -->
+            <div id="editor-toolbar" class="hidden flex-shrink-0 border-b border-slate-700 bg-slate-800/50 px-4 py-2 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span id="editor-slug" class="text-sm font-medium text-blue-400"></span>
+                    <span id="editor-source" class="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-400"></span>
+                    <span id="editor-dirty" class="hidden text-xs text-amber-400 font-medium">● unsaved</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="saveConfig()"
+                            class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+                        </svg>
+                        Save
+                    </button>
+                    <button onclick="openInChat()"
+                            class="text-xs px-3 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-white font-medium transition-colors">
+                        Open Chat
+                    </button>
+                    <button onclick="deleteConfig()"
+                            class="text-xs px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-600 text-white font-medium transition-colors">
+                        Delete
+                    </button>
+                </div>
+            </div>
+
+            <!-- Editor area -->
+            <div id="editor-area" class="flex-1 overflow-hidden flex flex-col">
+                <!-- Placeholder when no config selected -->
+                <div id="editor-placeholder" class="flex-1 flex items-center justify-center text-slate-500">
+                    <div class="text-center">
+                        <svg class="w-12 h-12 mx-auto mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p class="text-sm">Select a config from the sidebar to edit</p>
+                        <p class="text-xs mt-1">or create a new one</p>
+                    </div>
+                </div>
+
+                <!-- YAML editor -->
+                <textarea id="yaml-editor"
+                          class="hidden flex-1 w-full bg-slate-950 text-slate-200 editor-font editor-area p-4 resize-none focus:outline-none border-none text-sm"
+                          spellcheck="false"
+                          wrap="off"></textarea>
+
+                <!-- Validation status -->
+                <div id="validation-bar" class="hidden flex-shrink-0 border-t border-slate-700 bg-slate-800/50 px-4 py-2 flex items-center gap-2">
+                    <span id="validation-icon"></span>
+                    <span id="validation-msg" class="text-xs"></span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- New config modal -->
+    <div id="new-config-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <h2 class="text-lg font-semibold mb-4">New Configuration</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-400 mb-1">Slug (filename)</label>
+                    <input id="new-slug" type="text" placeholder="my-chatbot"
+                           class="w-full px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-sm text-white focus:outline-none focus:border-blue-500"
+                           pattern="[a-z0-9\-]+" title="Lowercase letters, numbers, and hyphens only">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-400 mb-1">Display Name</label>
+                    <input id="new-name" type="text" placeholder="My Chatbot"
+                           class="w-full px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-sm text-white focus:outline-none focus:border-blue-500">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button onclick="hideNewConfigModal()" class="text-xs px-4 py-2 rounded-lg bg-slate-600 hover:bg-slate-500 text-white transition-colors">Cancel</button>
+                <button onclick="createNewConfig()" class="text-xs px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors">Create</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+let currentSlug = null;
+let originalYaml = '';
+
+const editor = document.getElementById('yaml-editor');
+const placeholder = document.getElementById('editor-placeholder');
+const toolbar = document.getElementById('editor-toolbar');
+const validationBar = document.getElementById('validation-bar');
+
+document.getElementById('config-count').textContent = `${document.querySelectorAll('.config-card').length} configs`;
+
+// --- Config loading ---
+async function loadConfig(slug) {
+    // Highlight sidebar
+    document.querySelectorAll('.config-card').forEach(c => c.classList.remove('ring-2', 'ring-blue-500'));
+    const card = document.querySelector(`[data-slug="${slug}"]`);
+    if (card) card.classList.add('ring-2', 'ring-blue-500');
+
+    try {
+        const resp = await fetch(`/admin/config/${slug}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        currentSlug = slug;
+        originalYaml = data.yaml;
+
+        editor.value = data.yaml;
+        editor.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+        toolbar.classList.remove('hidden');
+        toolbar.classList.add('flex');
+        validationBar.classList.remove('hidden');
+        validationBar.classList.add('flex');
+
+        document.getElementById('editor-slug').textContent = slug;
+        document.getElementById('editor-source').textContent = data.source === 'file' ? 'FILE' : 'DYNAMIC';
+        document.getElementById('editor-dirty').classList.add('hidden');
+
+        validateYaml();
+    } catch (err) {
+        showToast(`Failed to load ${slug}: ${err.message}`, 'error');
+    }
+}
+
+// --- Mark dirty ---
+editor.addEventListener('input', () => {
+    const dirty = editor.value !== originalYaml;
+    document.getElementById('editor-dirty').classList.toggle('hidden', !dirty);
+    validateYaml();
+});
+
+// --- YAML validation (basic) ---
+function validateYaml() {
+    const icon = document.getElementById('validation-icon');
+    const msg = document.getElementById('validation-msg');
+    const yaml = editor.value.trim();
+
+    if (!yaml) {
+        icon.textContent = '⚠';
+        msg.textContent = 'Empty content';
+        msg.className = 'text-xs text-amber-400';
+        return false;
+    }
+
+    // Check for basic YAML structure hints
+    if (yaml.includes('\t')) {
+        icon.textContent = '⚠';
+        msg.textContent = 'Warning: tabs detected (YAML uses spaces)';
+        msg.className = 'text-xs text-amber-400';
+        return true; // warning, not error
+    }
+
+    const hasName = /^name:\s/m.test(yaml);
+    if (!hasName) {
+        icon.textContent = '⚠';
+        msg.textContent = 'Warning: missing "name" field';
+        msg.className = 'text-xs text-amber-400';
+        return true;
+    }
+
+    icon.textContent = '✓';
+    msg.textContent = `${yaml.split('\n').length} lines`;
+    msg.className = 'text-xs text-emerald-400';
+    return true;
+}
+
+// --- Save ---
+async function saveConfig() {
+    if (!currentSlug) return;
+
+    try {
+        const resp = await fetch(`/admin/config/${currentSlug}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ yaml: editor.value }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || 'Save failed');
+
+        originalYaml = editor.value;
+        document.getElementById('editor-dirty').classList.add('hidden');
+        showToast(`Saved: ${data.name}`, 'success');
+
+        // Update sidebar card name
+        const card = document.querySelector(`[data-slug="${currentSlug}"]`);
+        if (card) {
+            const nameEl = card.querySelector('.font-medium');
+            if (nameEl) nameEl.textContent = data.name;
+        }
+    } catch (err) {
+        showToast(`Save error: ${err.message}`, 'error');
+    }
+}
+
+// --- Delete ---
+async function deleteConfig() {
+    if (!currentSlug) return;
+    if (!confirm(`Delete config "${currentSlug}"? This cannot be undone.`)) return;
+
+    try {
+        const resp = await fetch(`/admin/config/${currentSlug}/delete`, { method: 'POST' });
+        if (!resp.ok) throw new Error('Delete failed');
+
+        // Remove sidebar card
+        const card = document.querySelector(`[data-slug="${currentSlug}"]`);
+        if (card) card.remove();
+
+        // Reset editor
+        currentSlug = null;
+        editor.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+        toolbar.classList.add('hidden');
+        toolbar.classList.remove('flex');
+        validationBar.classList.add('hidden');
+
+        showToast('Config deleted', 'success');
+        updateCount();
+    } catch (err) {
+        showToast(`Delete error: ${err.message}`, 'error');
+    }
+}
+
+// --- Reload all ---
+async function reloadAll() {
+    try {
+        const resp = await fetch('/admin/reload', { method: 'POST' });
+        const data = await resp.json();
+        showToast(`Reloaded ${data.configs.length} configs`, 'success');
+        setTimeout(() => location.reload(), 500);
+    } catch (err) {
+        showToast(`Reload error: ${err.message}`, 'error');
+    }
+}
+
+// --- Open in chat ---
+function openInChat() {
+    if (currentSlug) window.open(`/${currentSlug}/login`, '_blank');
+}
+
+// --- New config ---
+function showNewConfigModal() { document.getElementById('new-config-modal').classList.remove('hidden'); }
+function hideNewConfigModal() { document.getElementById('new-config-modal').classList.add('hidden'); }
+
+const DEFAULT_YAML = `name: "My Chatbot"
+description: "A new chatbot configuration"
+
+theme:
+  primary_color: "#2563eb"
+  secondary_color: "#1e40af"
+  accent_color: "#3b82f6"
+  background_color: "#f8fafc"
+  text_color: "#1e293b"
+
+auth:
+  type: "simple"
+  session_duration_minutes: 480
+
+chat:
+  placeholder: "Type your message..."
+  welcome_message: "Hello! How can I help you today?"
+  input:
+    type: "text"
+    rows: 1
+    max_rows: 6
+    submit_on_enter: true
+  endpoints:
+    - name: "default"
+      url: "http://localhost:8080/query"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        query: "{{message}}"
+      response_field: "response"
+`;
+
+async function createNewConfig() {
+    const slug = document.getElementById('new-slug').value.trim().replace(/[^a-z0-9\-]/g, '');
+    const name = document.getElementById('new-name').value.trim() || 'My Chatbot';
+
+    if (!slug) {
+        showToast('Slug is required', 'error');
+        return;
+    }
+
+    const yamlContent = DEFAULT_YAML.replace('name: "My Chatbot"', `name: "${name}"`);
+
+    try {
+        const resp = await fetch(`/admin/config/${slug}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ yaml: yamlContent }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || 'Create failed');
+
+        hideNewConfigModal();
+        showToast(`Created: ${name}`, 'success');
+        setTimeout(() => location.reload(), 500);
+    } catch (err) {
+        showToast(`Create error: ${err.message}`, 'error');
+    }
+}
+
+// --- Toast ---
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    const bg = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600';
+    toast.className = `toast ${bg} text-white text-sm px-4 py-2 rounded-lg shadow-lg`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+function updateCount() {
+    document.getElementById('config-count').textContent = `${document.querySelectorAll('.config-card').length} configs`;
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveConfig();
+    }
+});
+</script>
+</body>
+</html>

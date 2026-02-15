@@ -21,6 +21,9 @@
     .rich-json { background: #1e293b; color: #a5f3fc; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
     .rich-code { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
     .params-bar input { font-size: 0.75rem; }
+    .code-input { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace; font-size: 0.8rem; tab-size: 4; line-height: 1.5; background: #1e293b; color: #e2e8f0; }
+    .code-input::placeholder { color: #64748b; }
+    .input-label { font-size: 0.7rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
 </style>
 {% endblock %}
 {% block body %}
@@ -105,22 +108,48 @@
     <!-- Input area -->
     <div class="flex-shrink-0 border-t border-slate-200 bg-white">
         <div class="max-w-3xl mx-auto px-4 py-4">
+            {% if cfg.chat.input.label %}
+            <div class="input-label">{{ cfg.chat.input.label }}</div>
+            {% endif %}
             <form id="chat-form" class="flex items-end gap-3">
+                {% if cfg.chat.input.type == 'code' %}
+                <textarea id="chat-input" rows="{{ cfg.chat.input.rows }}"
+                          class="code-input flex-1 resize-none rounded-xl border border-slate-600 px-4 py-3
+                                 focus:outline-none focus:border-blue-500 transition-colors"
+                          placeholder="{{ cfg.chat.placeholder }}"
+                          spellcheck="false"
+                          data-mode="code"
+                          data-max-rows="{{ cfg.chat.input.max_rows }}"
+                          data-submit-enter="{{ cfg.chat.input.submit_on_enter | lower }}"></textarea>
+                {% elif cfg.chat.input.type == 'multiline' %}
+                <textarea id="chat-input" rows="{{ cfg.chat.input.rows }}"
+                          class="flex-1 resize-none rounded-xl border border-slate-300 px-4 py-2.5 text-sm
+                                 focus:outline-none focus:border-brand-primary transition-colors"
+                          placeholder="{{ cfg.chat.placeholder }}"
+                          data-mode="multiline"
+                          data-max-rows="{{ cfg.chat.input.max_rows }}"
+                          data-submit-enter="{{ cfg.chat.input.submit_on_enter | lower }}"></textarea>
+                {% else %}
                 <textarea id="chat-input" rows="1"
                           class="flex-1 resize-none rounded-xl border border-slate-300 px-4 py-2.5 text-sm
                                  focus:outline-none focus:border-brand-primary transition-colors"
                           placeholder="{{ cfg.chat.placeholder }}"
-                          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();document.getElementById('chat-form').requestSubmit()}"
-                          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
+                          data-mode="text"
+                          data-max-rows="{{ cfg.chat.input.max_rows }}"
+                          data-submit-enter="true"></textarea>
+                {% endif %}
                 <button type="submit" id="send-btn"
                         class="flex-shrink-0 w-10 h-10 rounded-xl brand-gradient text-white flex items-center justify-center
                                hover:opacity-90 transition-opacity disabled:opacity-50"
-                        title="Send">
+                        title="Send ({{ 'Ctrl+Enter' if not cfg.chat.input.submit_on_enter else 'Enter' }})">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7" transform="rotate(45 12 12)"/>
                     </svg>
                 </button>
             </form>
+            {% if cfg.chat.input.type in ('code', 'multiline') and not cfg.chat.input.submit_on_enter %}
+            <div class="text-xs text-slate-400 mt-1 text-right">Ctrl+Enter to send</div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -133,6 +162,46 @@ const container = document.getElementById('msg-container');
 const messagesDiv = document.getElementById('messages');
 const sendBtn = document.getElementById('send-btn');
 const EP_DISPLAY = {{ ep_display_json | safe }};
+const INPUT_MODE = input.dataset.mode || 'text';
+const SUBMIT_ENTER = input.dataset.submitEnter === 'true';
+const MAX_ROWS = parseInt(input.dataset.maxRows || '6');
+
+// Auto-resize textarea
+function autoResize() {
+    input.style.height = 'auto';
+    const lineHeight = parseInt(getComputedStyle(input).lineHeight) || 20;
+    const maxHeight = lineHeight * MAX_ROWS;
+    input.style.height = Math.min(input.scrollHeight, maxHeight) + 'px';
+}
+input.addEventListener('input', autoResize);
+
+// Tab key support for code mode
+if (INPUT_MODE === 'code') {
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = this.selectionStart;
+            const end = this.selectionEnd;
+            this.value = this.value.substring(0, start) + '    ' + this.value.substring(end);
+            this.selectionStart = this.selectionEnd = start + 4;
+        }
+    });
+}
+
+// Submit behavior
+input.addEventListener('keydown', function(e) {
+    if (SUBMIT_ENTER) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            form.requestSubmit();
+        }
+    } else {
+        if (e.key === 'Enter' && e.ctrlKey) {
+            e.preventDefault();
+            form.requestSubmit();
+        }
+    }
+});
 
 function applyParams() {
     const inputs = document.querySelectorAll('[data-param]');
@@ -253,7 +322,7 @@ form.addEventListener('submit', async (e) => {
 
     addMessage(msg, true);
     input.value = '';
-    input.style.height = 'auto';
+    autoResize();
     sendBtn.disabled = true;
     showTyping();
 
