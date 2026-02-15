@@ -4,6 +4,7 @@ Serves different UI experiences (login + chatbot flows) from YAML configs.
 """
 import os
 import json
+import secrets
 import yaml
 import httpx
 import logging
@@ -11,6 +12,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, parse_qs, urlparse
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from contextlib import asynccontextmanager
 
@@ -127,6 +131,26 @@ def get_config(slug: str) -> AppConfig:
 # ---------------------------------------------------------------------------
 LOCAL_JWT_SECRET = os.getenv("UI_GEN_JWT_SECRET", "ui-gen-dev-secret-change-me")
 
+# ---------------------------------------------------------------------------
+# Environment-based settings
+# ---------------------------------------------------------------------------
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
+FD_BASE_URL = os.getenv("FD_BASE_URL", "http://127.0.0.1:8080")
+CT_BASE_URL = os.getenv("CT_BASE_URL", "http://127.0.0.1:8000")
+
+def verify_admin(request: Request):
+    """Verify admin credentials from session cookie or raise 401."""
+    token = request.cookies.get("admin_session")
+    if token:
+        try:
+            claims = jwt.decode(token, LOCAL_JWT_SECRET, algorithms=["HS256"])
+            if claims.get("role") == "admin":
+                return claims
+        except JWTError:
+            pass
+    return None
+
 def create_local_token(username: str, duration_min: int = 480) -> str:
     """Create a local session JWT (used for simple auth only)."""
     payload = {
@@ -189,8 +213,9 @@ async def manifest_tester_page(request: Request):
     return templates.TemplateResponse("manifest_tester.html", {"request": request})
 
 @app.get("/api/projects")
-async def api_list_projects(fd_base: str = "http://127.0.0.1:8080"):
+async def api_list_projects(fd_base: str = None):
     """Proxy to Front Door to list available projects."""
+    fd_base = fd_base or FD_BASE_URL
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -202,9 +227,10 @@ async def api_list_projects(fd_base: str = "http://127.0.0.1:8080"):
         raise HTTPException(502, f"Could not reach Front Door at {fd_base}: {e}")
 
 @app.get("/api/manifest/{name}")
-async def api_get_manifest(name: str, ct_base: str = "http://127.0.0.1:8000",
+async def api_get_manifest(name: str, ct_base: str = None,
                            resolve_env: bool = False):
     """Proxy to Control Tower to get a specific manifest."""
+    ct_base = ct_base or CT_BASE_URL
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -265,6 +291,105 @@ async def activate_manifest(request: Request):
     CONFIGS[slug] = cfg
     logger.info(f"Activated manifest config: {slug} -> {display_name} ({len(chat_endpoints)} endpoints)")
     return JSONResponse({"slug": slug, "login_url": f"/{slug}/login"})
+
+# ---------------------------------------------------------------------------
+# Routes – admin (must be before /{slug}/* to avoid route conflicts)
+# ---------------------------------------------------------------------------
+@app.get("/admin/login", response_class=HTMLResponse)
+async def admin_login_page(request: Request):
+    """Admin login form."""
+    if verify_admin(request):
+        return RedirectResponse("/admin", status_code=302)
+    return templates.TemplateResponse("admin_login.html", {
+        "request": request, "error": None,
+    })
+
+@app.post("/admin/login")
+async def admin_login_submit(request: Request,
+                              username: str = Form(...), password: str = Form(...)):
+    """Validate admin credentials and set session cookie."""
+    if secrets.compare_digest(username, ADMIN_USERNAME) and secrets.compare_digest(password, ADMIN_PASSWORD):
+        token = jwt.encode({
+            "sub": username, "role": "admin",
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(hours=8),
+        }, LOCAL_JWT_SECRET, algorithm="HS256")
+        response = RedirectResponse("/admin", status_code=302)
+        response.set_cookie("admin_session", token, httponly=True, samesite="lax", max_age=8*3600)
+        return response
+    return templates.TemplateResponse("admin_login.html", {
+        "request": request, "error": "Invalid credentials.",
+    })
+
+@app.get("/admin/logout")
+async def admin_logout():
+    response = RedirectResponse("/admin/login", status_code=302)
+    response.delete_cookie("admin_session")
+    return response
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Admin interface to view, edit, and reload configs."""
+    if not verify_admin(request):
+        return RedirectResponse("/admin/login", status_code=302)
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "configs": CONFIGS,
+    })
+
+@app.get("/admin/config/{slug}")
+async def admin_get_config(request: Request, slug: str):
+    """Return raw YAML content for a config."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    if yaml_path.exists():
+        return JSONResponse({"slug": slug, "yaml": yaml_path.read_text(encoding="utf-8"), "source": "file"})
+    # Dynamic config (e.g. manifest tester) – serialize from memory
+    if slug in CONFIGS:
+        cfg = CONFIGS[slug]
+        return JSONResponse({"slug": slug, "yaml": yaml.dump(cfg.model_dump(), default_flow_style=False, sort_keys=False), "source": "dynamic"})
+    raise HTTPException(404, f"Config '{slug}' not found")
+
+@app.put("/admin/config/{slug}")
+async def admin_save_config(request: Request, slug: str):
+    """Save edited YAML content to disk and reload that config."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    body = await request.json()
+    yaml_content = body.get("yaml", "")
+    if not yaml_content.strip():
+        raise HTTPException(400, "Empty YAML content")
+    try:
+        raw = yaml.safe_load(yaml_content)
+        cfg = AppConfig(**raw)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid config: {e}")
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    yaml_path.write_text(yaml_content, encoding="utf-8")
+    CONFIGS[slug] = cfg
+    logger.info(f"Admin saved config: {slug} -> {cfg.name}")
+    return JSONResponse({"status": "ok", "slug": slug, "name": cfg.name})
+
+@app.post("/admin/config/{slug}/delete")
+async def admin_delete_config(request: Request, slug: str):
+    """Delete a config file and remove from memory."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    yaml_path = CONFIG_DIR / f"{slug}.yaml"
+    if yaml_path.exists():
+        yaml_path.unlink()
+    CONFIGS.pop(slug, None)
+    logger.info(f"Admin deleted config: {slug}")
+    return JSONResponse({"status": "ok"})
+
+@app.post("/admin/reload")
+async def admin_reload(request: Request):
+    """Reload all configs from disk."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    load_configs()
+    return JSONResponse({"status": "ok", "configs": list(CONFIGS.keys())})
 
 # ---------------------------------------------------------------------------
 # Routes – login
@@ -474,65 +599,6 @@ async def chat_send(request: Request, slug: str):
             return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})
     except httpx.RequestError as e:
         return JSONResponse({"response": f"Could not reach backend: {e}"})
-
-# ---------------------------------------------------------------------------
-# Routes – admin
-# ---------------------------------------------------------------------------
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    """Admin interface to view, edit, and reload configs."""
-    return templates.TemplateResponse("admin.html", {
-        "request": request,
-        "configs": CONFIGS,
-    })
-
-@app.get("/admin/config/{slug}")
-async def admin_get_config(slug: str):
-    """Return raw YAML content for a config."""
-    yaml_path = CONFIG_DIR / f"{slug}.yaml"
-    if yaml_path.exists():
-        return JSONResponse({"slug": slug, "yaml": yaml_path.read_text(encoding="utf-8"), "source": "file"})
-    # Dynamic config (e.g. manifest tester) – serialize from memory
-    if slug in CONFIGS:
-        cfg = CONFIGS[slug]
-        return JSONResponse({"slug": slug, "yaml": yaml.dump(cfg.model_dump(), default_flow_style=False, sort_keys=False), "source": "dynamic"})
-    raise HTTPException(404, f"Config '{slug}' not found")
-
-@app.put("/admin/config/{slug}")
-async def admin_save_config(slug: str, request: Request):
-    """Save edited YAML content to disk and reload that config."""
-    body = await request.json()
-    yaml_content = body.get("yaml", "")
-    if not yaml_content.strip():
-        raise HTTPException(400, "Empty YAML content")
-    # Validate YAML parses and fits the model
-    try:
-        raw = yaml.safe_load(yaml_content)
-        cfg = AppConfig(**raw)
-    except Exception as e:
-        raise HTTPException(400, f"Invalid config: {e}")
-    # Write to disk
-    yaml_path = CONFIG_DIR / f"{slug}.yaml"
-    yaml_path.write_text(yaml_content, encoding="utf-8")
-    CONFIGS[slug] = cfg
-    logger.info(f"Admin saved config: {slug} -> {cfg.name}")
-    return JSONResponse({"status": "ok", "slug": slug, "name": cfg.name})
-
-@app.post("/admin/config/{slug}/delete")
-async def admin_delete_config(slug: str):
-    """Delete a config file and remove from memory."""
-    yaml_path = CONFIG_DIR / f"{slug}.yaml"
-    if yaml_path.exists():
-        yaml_path.unlink()
-    CONFIGS.pop(slug, None)
-    logger.info(f"Admin deleted config: {slug}")
-    return JSONResponse({"status": "ok"})
-
-@app.post("/admin/reload")
-async def admin_reload():
-    """Reload all configs from disk."""
-    load_configs()
-    return JSONResponse({"status": "ok", "configs": list(CONFIGS.keys())})
 
 # ---------------------------------------------------------------------------
 # Routes – logout
