@@ -3,12 +3,14 @@ DSP UI Generator - Configuration-based UI server.
 Serves different UI experiences (login + chatbot flows) from YAML configs.
 """
 import os
+import json
 import yaml
 import httpx
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode, parse_qs, urlparse
 
 from contextlib import asynccontextmanager
 
@@ -49,6 +51,11 @@ class AuthConfig(BaseModel):
     jwt_algorithm: str = "HS256"
     session_duration_minutes: int = 480
 
+class ResponseDisplayItem(BaseModel):
+    field: str                              # dot-notation path into response JSON
+    label: str = ""                         # display label
+    type: str = "text"                      # text | code | table | json | markdown
+
 class ChatEndpoint(BaseModel):
     name: str = "default"
     url: str = ""                           # e.g. http://fd2:8080/query
@@ -57,6 +64,7 @@ class ChatEndpoint(BaseModel):
     headers: Dict[str, str] = {}            # extra headers; {{token}} is replaced
     body_template: Dict[str, Any] = {}      # template; {{message}} / {{token}} replaced
     response_field: str = "response"        # field in JSON response containing answer
+    response_display: List[ResponseDisplayItem] = []  # optional rich display items
 
 class ChatConfig(BaseModel):
     system_prompt: str = "You are a helpful AI assistant."
@@ -65,9 +73,15 @@ class ChatConfig(BaseModel):
     endpoints: list[ChatEndpoint] = []
     show_endpoint_selector: bool = False    # let user pick endpoint in UI
 
+class ParamConfig(BaseModel):
+    name: str                               # e.g. "project"
+    label: str = ""                         # display label in UI
+    default: str = ""                       # default value
+
 class AppConfig(BaseModel):
     name: str = "AI Assistant"
     description: str = ""
+    params: List[ParamConfig] = []          # URL/request parameters
     theme: ThemeConfig = ThemeConfig()
     auth: AuthConfig = AuthConfig()
     chat: ChatConfig = ChatConfig()
@@ -159,16 +173,121 @@ async def reload_configs():
     return {"status": "ok", "configs": list(CONFIGS.keys())}
 
 # ---------------------------------------------------------------------------
+# Routes – manifest tester
+# ---------------------------------------------------------------------------
+@app.get("/manifest-tester", response_class=HTMLResponse)
+async def manifest_tester_page(request: Request):
+    return templates.TemplateResponse("manifest_tester.html", {"request": request})
+
+@app.get("/api/projects")
+async def api_list_projects(fd_base: str = "http://127.0.0.1:8080"):
+    """Proxy to Front Door to list available projects."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{fd_base.rstrip('/')}/admin/projects",
+                headers={"Accept": "application/json"},
+            )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Could not reach Front Door at {fd_base}: {e}")
+
+@app.get("/api/manifest/{name}")
+async def api_get_manifest(name: str, ct_base: str = "http://127.0.0.1:8000",
+                           resolve_env: bool = False):
+    """Proxy to Control Tower to get a specific manifest."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{ct_base.rstrip('/')}/manifests/{name}",
+                params={"resolve_env": str(resolve_env).lower()},
+            )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Could not reach Control Tower at {ct_base}: {e}")
+
+@app.post("/api/activate-manifest")
+async def activate_manifest(request: Request):
+    """Build a dynamic AppConfig from manifest module data and store it."""
+    data = await request.json()
+    project_name = data["project_name"]
+    fd_base = data["fd_base"].rstrip("/")
+    auth_cfg = data.get("auth", {})
+    endpoints_data = data.get("endpoints", [])
+    display_name = data.get("display_name", project_name)
+
+    slug = f"mt-{project_name}"
+
+    auth = AuthConfig(
+        type="jwt_endpoint",
+        endpoint=f"{fd_base}/{project_name}/{auth_cfg.get('path', 'auth/token').lstrip('/')}",
+        username_field=auth_cfg.get("username_field", "username"),
+        password_field=auth_cfg.get("password_field", "password"),
+        token_response_field=auth_cfg.get("token_response_field", "access_token"),
+    )
+
+    chat_endpoints = []
+    for ep in endpoints_data:
+        chat_endpoints.append(ChatEndpoint(
+            name=ep["name"],
+            url=f"{fd_base}/{project_name}/{ep['path'].lstrip('/')}",
+            method=ep.get("method", "POST"),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer {{token}}"},
+            body_template=ep.get("body_template", {"query": "{{message}}"}),
+            response_field=ep.get("response_field", "choices.0.message.content"),
+        ))
+
+    cfg = AppConfig(
+        name=display_name,
+        description=f"Manifest tester: {project_name}",
+        theme=ThemeConfig(
+            primary_color="#f59e0b", secondary_color="#d97706",
+            accent_color="#fbbf24", background_color="#fffbeb",
+        ),
+        auth=auth,
+        chat=ChatConfig(
+            placeholder="Enter your test input...",
+            welcome_message=f"Connected to '{project_name}'. Select an endpoint and start testing.",
+            endpoints=chat_endpoints,
+            show_endpoint_selector=len(chat_endpoints) > 1,
+        ),
+    )
+
+    CONFIGS[slug] = cfg
+    logger.info(f"Activated manifest config: {slug} -> {display_name} ({len(chat_endpoints)} endpoints)")
+    return JSONResponse({"slug": slug, "login_url": f"/{slug}/login"})
+
+# ---------------------------------------------------------------------------
 # Routes – login
 # ---------------------------------------------------------------------------
+def resolve_params(cfg: AppConfig, request: Request) -> Dict[str, str]:
+    """Build param values from config defaults, cookie, then query string overrides."""
+    params = {p.name: p.default for p in cfg.params}
+    # Cookie-stored params (set after login)
+    cookie_params = request.cookies.get("ui_params")
+    if cookie_params:
+        try:
+            params.update(json.loads(cookie_params))
+        except Exception:
+            pass
+    # Query string overrides
+    for p in cfg.params:
+        qval = request.query_params.get(p.name)
+        if qval:
+            params[p.name] = qval
+    return params
+
 @app.get("/{slug}/login", response_class=HTMLResponse)
 async def login_page(request: Request, slug: str):
     cfg = get_config(slug)
     session = get_session(request)
     if session:
-        return RedirectResponse(f"/{slug}/chat", status_code=302)
+        params = resolve_params(cfg, request)
+        qs = urlencode(params) if params else ""
+        return RedirectResponse(f"/{slug}/chat?{qs}" if qs else f"/{slug}/chat", status_code=302)
     return templates.TemplateResponse("login.html", {
         "request": request, "cfg": cfg, "slug": slug, "error": None,
+        "params": resolve_params(cfg, request),
     })
 
 @app.post("/{slug}/login")
@@ -192,13 +311,19 @@ async def login_submit(request: Request, slug: str,
             error = "Auth endpoint not configured."
         else:
             try:
+                # Substitute params in auth endpoint URL
+                params = resolve_params(cfg, request)
+                auth_url = auth.endpoint
+                for k, v in params.items():
+                    auth_url = auth_url.replace("{{param." + k + "}}", v)
+                    auth_url = auth_url.replace("{{" + k + "}}", v)
                 payload = {
                     auth.username_field: username,
                     auth.password_field: password,
                     **auth.extra_fields,
                 }
                 async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.post(auth.endpoint, json=payload)
+                    resp = await client.post(auth_url, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
                     backend_token = data.get(auth.token_response_field)
@@ -218,12 +343,20 @@ async def login_submit(request: Request, slug: str,
 
     # Create local session token
     session_token = create_local_token(username, auth.session_duration_minutes)
-    response = RedirectResponse(f"/{slug}/chat", status_code=302)
+    # Collect params from query string
+    params = resolve_params(cfg, request)
+    qs = urlencode(params) if params else ""
+    redirect_url = f"/{slug}/chat?{qs}" if qs else f"/{slug}/chat"
+    response = RedirectResponse(redirect_url, status_code=302)
     response.set_cookie("session_token", session_token, httponly=True, samesite="lax",
                          max_age=auth.session_duration_minutes * 60)
     # Store backend JWT separately so chat can use it
     if backend_token:
         response.set_cookie("backend_token", backend_token, httponly=True, samesite="lax",
+                             max_age=auth.session_duration_minutes * 60)
+    # Persist params in cookie so they survive across requests
+    if params:
+        response.set_cookie("ui_params", json.dumps(params), httponly=True, samesite="lax",
                              max_age=auth.session_duration_minutes * 60)
     return response
 
@@ -235,12 +368,23 @@ async def chat_page(request: Request, slug: str):
     cfg = get_config(slug)
     session = get_session(request)
     if not session:
-        return RedirectResponse(f"/{slug}/login", status_code=302)
+        params = resolve_params(cfg, request)
+        qs = urlencode(params) if params else ""
+        return RedirectResponse(f"/{slug}/login?{qs}" if qs else f"/{slug}/login", status_code=302)
+    params = resolve_params(cfg, request)
+    # Build endpoint display config for JS
+    ep_display = {}
+    for e in cfg.chat.endpoints:
+        if e.response_display:
+            ep_display[e.name] = [item.model_dump() for item in e.response_display]
     return templates.TemplateResponse("chat.html", {
         "request": request, "cfg": cfg, "slug": slug,
         "username": session.get("sub", "User"),
         "endpoints": [e.name for e in cfg.chat.endpoints],
         "show_endpoint_selector": cfg.chat.show_endpoint_selector,
+        "params": params,
+        "param_configs": cfg.params,
+        "ep_display_json": json.dumps(ep_display),
     })
 
 @app.post("/{slug}/chat/send")
@@ -263,32 +407,59 @@ async def chat_send(request: Request, slug: str):
     if not ep:
         return JSONResponse({"response": "No chat endpoint configured."})
 
+    # Collect params from cookie/request
+    params = resolve_params(cfg, request)
+
     # Build request body from template
-    def substitute(obj, msg: str, token: str):
-        """Recursively substitute {{message}} and {{token}} in body template."""
+    def substitute(obj, msg: str, token: str, params: Dict[str, str]):
+        """Recursively substitute {{message}}, {{token}}, and {{param.*}} placeholders."""
         if isinstance(obj, str):
-            return obj.replace("{{message}}", msg).replace("{{token}}", token)
+            s = obj.replace("{{message}}", msg).replace("{{token}}", token)
+            for k, v in params.items():
+                s = s.replace("{{param." + k + "}}", v)
+                s = s.replace("{{" + k + "}}", v)  # shorthand
+            return s
         if isinstance(obj, dict):
-            return {k: substitute(v, msg, token) for k, v in obj.items()}
+            return {k: substitute(v, msg, token, params) for k, v in obj.items()}
         if isinstance(obj, list):
-            return [substitute(i, msg, token) for i in obj]
+            return [substitute(i, msg, token, params) for i in obj]
         return obj
 
-    req_body = substitute(ep.body_template, user_message, backend_token) if ep.body_template else {"query": user_message}
-    req_headers = {k: v.replace("{{token}}", backend_token) for k, v in ep.headers.items()}
+    req_body = substitute(ep.body_template, user_message, backend_token, params) if ep.body_template else {"query": user_message}
+    req_headers = {k: substitute(v, user_message, backend_token, params) for k, v in ep.headers.items()}
+    req_url = substitute(ep.url, user_message, backend_token, params)
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.request(ep.method, ep.url, json=req_body, headers=req_headers)
+            resp = await client.request(ep.method, req_url, json=req_body, headers=req_headers)
         if resp.status_code == 200:
             data = resp.json()
-            # Extract answer from response using dot-notation field path
-            answer = data
-            for part in ep.response_field.split("."):
-                if isinstance(answer, dict):
-                    answer = answer.get(part, "")
-                else:
-                    break
+            def extract_field(data, field_path: str):
+                """Extract value via dot-notation, supporting list indices."""
+                val = data
+                for part in field_path.split("."):
+                    if isinstance(val, dict):
+                        val = val.get(part, "")
+                    elif isinstance(val, list) and part.isdigit():
+                        idx = int(part)
+                        val = val[idx] if idx < len(val) else ""
+                    else:
+                        break
+                return val
+
+            # If response_display is configured, return rich display items
+            if ep.response_display:
+                display_items = []
+                for item in ep.response_display:
+                    val = extract_field(data, item.field)
+                    display_items.append({
+                        "label": item.label or item.field,
+                        "type": item.type,
+                        "value": val,
+                    })
+                return JSONResponse({"response": str(extract_field(data, ep.response_field)), "display": display_items})
+
+            answer = extract_field(data, ep.response_field)
             return JSONResponse({"response": str(answer)})
         else:
             return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})

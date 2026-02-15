@@ -6,6 +6,11 @@
 name: "AI Research Assistant"
 description: "Multi-mode AI assistant with query expansion and retrieval"
 
+params:
+  - name: "project"
+    label: "Project"
+    default: "sas2py"
+
 theme:
   primary_color: "#7c3aed"
   secondary_color: "#6d28d9"
@@ -15,7 +20,7 @@ theme:
 
 auth:
   type: "jwt_endpoint"
-  endpoint: "http://127.0.0.1:8080/sas2py/auth/token"
+  endpoint: "http://127.0.0.1:8080/{{project}}/auth/token"
   username_field: "username"
   password_field: "password"
   token_response_field: "access_token"
@@ -63,3 +68,45 @@ chat:
         configuration_name: "default"
         top_k: 10
       response_field: "documents"
+
+    - name: "sas2py-convert"
+      url: "http://127.0.0.1:8080/{{project}}/convert"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        template_name: "converter"
+        user_input: "{{message}}"
+      response_field: "choices.0.message.content"
+
+    - name: "sas2py-openai"
+      url: "http://127.0.0.1:8080/{{project}}/v1/chat/completions"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        model: "openai/gpt-oss-120b"
+        messages:
+          - role: "system"
+            content: "You are an expert SAS to Python code converter. Convert SAS code to equivalent Python code using pandas, numpy, and other standard libraries. Maintain the same logic and output format."
+          - role: "user"
+            content: "{{message}}"
+        max_tokens: 200
+        temperature: 1.00
+        top_p: 1.00
+        frequency_penalty: 0.00
+        presence_penalty: 0.00
+        stream: false
+      response_field: "choices.0.message.content"
+      response_display:
+        - field: "choices.0.message.content"
+          label: "Response"
+          type: "code"
+        - field: "model"
+          label: "Model"
+          type: "text"
+        - field: "usage"
+          label: "Token Usage"
+          type: "table"

@@ -14,10 +14,17 @@
     .msg-content code { background: #e2e8f0; padding: 1px 5px; border-radius: 4px; font-size: 0.875em; }
     .msg-content pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
     .msg-content pre code { background: none; padding: 0; color: inherit; }
+    .rich-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 6px 0; }
+    .rich-table th, .rich-table td { border: 1px solid #cbd5e1; padding: 4px 8px; text-align: left; }
+    .rich-table th { background: #f1f5f9; font-weight: 600; }
+    .rich-label { font-size: 0.7rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; margin-bottom: 2px; }
+    .rich-json { background: #1e293b; color: #a5f3fc; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
+    .rich-code { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
+    .params-bar input { font-size: 0.75rem; }
 </style>
 {% endblock %}
 {% block body %}
-<div class="h-screen flex flex-col">
+<div class="fixed inset-0 flex flex-col" style="background-color: {{ cfg.theme.background_color }}">
     <!-- Top bar -->
     <header class="flex-shrink-0 border-b border-slate-200 bg-white">
         <div class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -42,6 +49,13 @@
                     {% endfor %}
                 </select>
                 {% endif %}
+                {% if param_configs %}
+                <button onclick="document.getElementById('params-panel').classList.toggle('hidden')"
+                        class="text-xs border border-slate-300 rounded-lg px-2 py-1.5 hover:bg-slate-50 transition-colors"
+                        title="Parameters">
+                    &#9881; Params
+                </button>
+                {% endif %}
                 <span class="text-xs text-slate-500">{{ username }}</span>
                 <a href="/{{ slug }}/logout"
                    class="text-xs text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1">
@@ -53,6 +67,23 @@
             </div>
         </div>
     </header>
+
+    <!-- Params panel -->
+    {% if param_configs %}
+    <div id="params-panel" class="hidden flex-shrink-0 border-b border-slate-200 bg-slate-50 params-bar">
+        <div class="max-w-5xl mx-auto px-4 py-2 flex flex-wrap items-center gap-3">
+            {% for p in param_configs %}
+            <div class="flex items-center gap-1.5">
+                <label class="text-xs font-medium text-slate-500">{{ p.label or p.name }}:</label>
+                <input type="text" data-param="{{ p.name }}" value="{{ params.get(p.name, p.default) }}"
+                       class="px-2 py-1 rounded border border-slate-300 w-32 focus:outline-none focus:border-amber-500">
+            </div>
+            {% endfor %}
+            <button onclick="applyParams()"
+                    class="text-xs px-3 py-1 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors">Apply</button>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Messages area -->
     <div id="messages" class="flex-1 overflow-y-auto">
@@ -73,7 +104,7 @@
 
     <!-- Input area -->
     <div class="flex-shrink-0 border-t border-slate-200 bg-white">
-        <div class="max-w-3xl mx-auto px-4 py-3">
+        <div class="max-w-3xl mx-auto px-4 py-4">
             <form id="chat-form" class="flex items-end gap-3">
                 <textarea id="chat-input" rows="1"
                           class="flex-1 resize-none rounded-xl border border-slate-300 px-4 py-2.5 text-sm
@@ -101,6 +132,14 @@ const input = document.getElementById('chat-input');
 const container = document.getElementById('msg-container');
 const messagesDiv = document.getElementById('messages');
 const sendBtn = document.getElementById('send-btn');
+const EP_DISPLAY = {{ ep_display_json | safe }};
+
+function applyParams() {
+    const inputs = document.querySelectorAll('[data-param]');
+    const qs = new URLSearchParams();
+    inputs.forEach(inp => qs.set(inp.dataset.param, inp.value));
+    window.location.href = `/${SLUG}/chat?${qs.toString()}`;
+}
 
 function escapeHtml(text) {
     const d = document.createElement('div');
@@ -121,7 +160,44 @@ function formatMessage(text) {
     return html;
 }
 
-function addMessage(text, isUser) {
+function renderRichValue(item) {
+    const val = item.value;
+    const t = item.type;
+    let html = `<div class="rich-label">${escapeHtml(item.label)}</div>`;
+    if (t === 'table' && typeof val === 'object') {
+        html += renderTable(val);
+    } else if (t === 'json') {
+        html += `<div class="rich-json">${escapeHtml(typeof val === 'string' ? val : JSON.stringify(val, null, 2))}</div>`;
+    } else if (t === 'code') {
+        html += `<div class="rich-code">${escapeHtml(typeof val === 'string' ? val : JSON.stringify(val, null, 2))}</div>`;
+    } else if (t === 'markdown' || t === 'text') {
+        html += `<div class="text-sm text-slate-700">${formatMessage(String(val))}</div>`;
+    } else {
+        html += `<div class="text-sm text-slate-700">${formatMessage(String(val))}</div>`;
+    }
+    return html;
+}
+
+function renderTable(val) {
+    // Array of objects → table
+    if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object') {
+        const keys = Object.keys(val[0]);
+        let h = '<table class="rich-table"><thead><tr>' + keys.map(k => `<th>${escapeHtml(k)}</th>`).join('') + '</tr></thead><tbody>';
+        val.forEach(row => { h += '<tr>' + keys.map(k => `<td>${escapeHtml(String(row[k] ?? ''))}</td>`).join('') + '</tr>'; });
+        h += '</tbody></table>';
+        return h;
+    }
+    // Object → key-value table
+    if (typeof val === 'object' && !Array.isArray(val)) {
+        let h = '<table class="rich-table"><tbody>';
+        Object.entries(val).forEach(([k, v]) => { h += `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(String(v))}</td></tr>`; });
+        h += '</tbody></table>';
+        return h;
+    }
+    return `<div class="text-sm">${escapeHtml(String(val))}</div>`;
+}
+
+function addMessage(text, isUser, displayItems) {
     const div = document.createElement('div');
     div.className = isUser ? 'msg-user rounded-lg p-4' : 'msg-bot rounded-lg p-4';
 
@@ -131,10 +207,15 @@ function addMessage(text, isUser) {
 
     const iconBg = isUser ? 'brand-gradient' : 'bg-slate-300';
 
+    let contentHtml = formatMessage(text);
+    if (displayItems && displayItems.length > 0) {
+        contentHtml = displayItems.map(item => renderRichValue(item)).join('');
+    }
+
     div.innerHTML = `
         <div class="flex items-start gap-3">
             <div class="w-7 h-7 rounded-full ${iconBg} flex items-center justify-center flex-shrink-0 mt-0.5">${icon}</div>
-            <div class="msg-content text-sm ${isUser ? '' : 'text-slate-700'}">${formatMessage(text)}</div>
+            <div class="msg-content text-sm ${isUser ? '' : 'text-slate-700'} w-full">${contentHtml}</div>
         </div>`;
     container.appendChild(div);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -187,7 +268,7 @@ form.addEventListener('submit', async (e) => {
         });
         const data = await resp.json();
         removeTyping();
-        addMessage(data.response || 'No response received.', false);
+        addMessage(data.response || 'No response received.', false, data.display || null);
     } catch (err) {
         removeTyping();
         addMessage('Error: Could not reach the server.', false);

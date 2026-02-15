@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manifest Tester - DSP UI Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .fade-in { animation: fadeIn 0.2s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        textarea { font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800">
+    <div class="max-w-4xl mx-auto px-6 py-8">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold">Manifest Tester</h1>
+                    <p class="text-sm text-slate-500">Load a manifest, authenticate, and test endpoints</p>
+                </div>
+            </div>
+            <a href="/" class="text-sm text-slate-500 hover:text-slate-700 transition-colors">&larr; Back</a>
+        </div>
+
+        <!-- Step 1: Service URLs -->
+        <section class="bg-white rounded-xl border border-slate-200 p-6 mb-4">
+            <h2 class="text-sm font-semibold text-slate-700 mb-4">Service URLs</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">Front Door (FD) Base URL</label>
+                    <input id="fd-base" type="text" value="http://127.0.0.1:8080"
+                           class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">Control Tower (CT) Base URL</label>
+                    <input id="ct-base" type="text" value="http://127.0.0.1:8000"
+                           class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+                </div>
+            </div>
+            <button onclick="loadProjects()" id="load-btn"
+                    class="mt-4 px-4 py-2 bg-amber-500 text-white text-sm font-medium rounded-lg hover:bg-amber-600 transition-colors">
+                Load Projects from FD
+            </button>
+            <div id="load-error" class="hidden mt-3 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm"></div>
+        </section>
+
+        <!-- Step 2: Projects list -->
+        <section id="projects-section" class="hidden bg-white rounded-xl border border-slate-200 p-6 mb-4 fade-in">
+            <h2 class="text-sm font-semibold text-slate-700 mb-3">Available Projects</h2>
+            <div id="projects-list" class="flex flex-wrap gap-2"></div>
+        </section>
+
+        <!-- Step 3: Manifest details + config -->
+        <section id="manifest-section" class="hidden bg-white rounded-xl border border-slate-200 p-6 mb-4 fade-in">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-sm font-semibold text-slate-700">Manifest: <span id="manifest-name" class="text-amber-600"></span></h2>
+                <span id="manifest-env" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500"></span>
+            </div>
+
+            <!-- Detected modules summary -->
+            <div id="modules-summary" class="mb-6 p-4 rounded-lg bg-slate-50 border border-slate-200 text-sm space-y-1"></div>
+
+            <!-- Auth config -->
+            <div class="mb-6">
+                <h3 class="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                    Authentication (JWT)
+                </h3>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-500 mb-1">Auth Path (appended to FD/{project}/...)</label>
+                        <input id="auth-path" type="text" value="auth/token"
+                               class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-500 mb-1">Token Response Field</label>
+                        <input id="auth-token-field" type="text" value="access_token"
+                               class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inference endpoints -->
+            <div class="mb-6">
+                <h3 class="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Inference Endpoints
+                </h3>
+                <div id="endpoints-list" class="space-y-4"></div>
+                <button onclick="addEndpoint()" class="mt-3 text-xs text-amber-600 hover:text-amber-700 font-medium">+ Add endpoint manually</button>
+            </div>
+
+            <!-- Activate -->
+            <button onclick="activate()" id="activate-btn"
+                    class="w-full py-3 bg-amber-500 text-white font-semibold rounded-lg hover:bg-amber-600 transition-colors flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Activate &amp; Test
+            </button>
+            <div id="activate-error" class="hidden mt-3 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm"></div>
+        </section>
+    </div>
+
+<script>
+let currentProject = null;
+let currentManifest = null;
+let endpointCounter = 0;
+
+function fdBase() { return document.getElementById('fd-base').value.replace(/\/+$/, ''); }
+function ctBase() { return document.getElementById('ct-base').value.replace(/\/+$/, ''); }
+
+function showError(id, msg) {
+    const el = document.getElementById(id);
+    el.textContent = msg; el.classList.remove('hidden');
+}
+function hideError(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ── Step 1: Load projects from FD ──────────────────────────────────────
+async function loadProjects() {
+    hideError('load-error');
+    const btn = document.getElementById('load-btn');
+    btn.disabled = true; btn.textContent = 'Loading...';
+    try {
+        const resp = await fetch(`/api/projects?fd_base=${encodeURIComponent(fdBase())}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        // Handle various response shapes:
+        //   {projects: {name: {...}, ...}, total: N}  — FD format
+        //   [str, ...]  or  [{project_id, ...}, ...]  — array formats
+        //   {key: val, ...}  — plain object keys
+        let projects = [];
+        if (data.projects && typeof data.projects === 'object' && !Array.isArray(data.projects)) {
+            projects = Object.keys(data.projects);
+        } else if (Array.isArray(data)) {
+            projects = data.map(p => typeof p === 'string' ? p : (p.project_id || p.name || p.id || JSON.stringify(p)));
+        } else if (typeof data === 'object') {
+            projects = Object.keys(data).filter(k => k !== 'total');
+        }
+
+        const container = document.getElementById('projects-list');
+        container.innerHTML = projects.length === 0
+            ? '<p class="text-sm text-slate-400">No projects found.</p>'
+            : projects.map(p => `
+                <button onclick="selectProject('${p}')"
+                        class="project-btn px-4 py-2 rounded-lg border border-slate-300 text-sm font-medium
+                               hover:border-amber-500 hover:bg-amber-50 transition-colors"
+                        data-project="${p}">${p}</button>
+            `).join('');
+
+        document.getElementById('projects-section').classList.remove('hidden');
+        document.getElementById('manifest-section').classList.add('hidden');
+    } catch (e) {
+        showError('load-error', `Failed to load projects: ${e.message}`);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Load Projects from FD';
+    }
+}
+
+// ── Step 2: Select a project and load its manifest from CT ─────────────
+async function selectProject(name) {
+    currentProject = name;
+    // Highlight selected button
+    document.querySelectorAll('.project-btn').forEach(b => {
+        b.classList.toggle('border-amber-500', b.dataset.project === name);
+        b.classList.toggle('bg-amber-50', b.dataset.project === name);
+    });
+
+    try {
+        const resp = await fetch(`/api/manifest/${name}?ct_base=${encodeURIComponent(ctBase())}&resolve_env=false`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        currentManifest = await resp.json();
+        renderManifest(currentManifest);
+        document.getElementById('manifest-section').classList.remove('hidden');
+    } catch (e) {
+        showError('load-error', `Failed to load manifest '${name}': ${e.message}`);
+    }
+}
+
+// ── Step 3: Parse and render manifest ──────────────────────────────────
+function renderManifest(manifest) {
+    document.getElementById('manifest-name').textContent = manifest.project_id || manifest.name || currentProject;
+    document.getElementById('manifest-env').textContent = manifest.environment || '';
+
+    const modules = manifest.modules || [];
+    const mtype = m => m.module_type || m.type || '';
+    const jwtMods = modules.filter(m => mtype(m) === 'jwt_config');
+    const infMods = modules.filter(m => mtype(m) === 'inference_endpoint');
+    const otherMods = modules.filter(m => mtype(m) !== 'jwt_config' && mtype(m) !== 'inference_endpoint');
+
+    // Summary
+    const summary = document.getElementById('modules-summary');
+    let html = '<div class="font-medium text-slate-700 mb-1">Detected Modules</div>';
+    jwtMods.forEach(m => { html += `<div class="text-green-700">&#10003; JWT Auth: <span class="font-medium">${m.name}</span></div>`; });
+    infMods.forEach(m => { html += `<div class="text-green-700">&#10003; Inference: <span class="font-medium">${m.name}</span></div>`; });
+    otherMods.forEach(m => { html += `<div class="text-slate-500">&bull; ${mtype(m)}: ${m.name}</div>`; });
+    if (jwtMods.length === 0) html += '<div class="text-amber-600">&#9888; No jwt_config module found — using defaults</div>';
+    if (infMods.length === 0) html += '<div class="text-amber-600">&#9888; No inference_endpoint modules found — add manually below</div>';
+    summary.innerHTML = html;
+
+    // Auth defaults from JWT module
+    if (jwtMods.length > 0) {
+        const jc = jwtMods[0].config || {};
+        if (jc.auth_path) document.getElementById('auth-path').value = jc.auth_path;
+        if (jc.token_response_field) document.getElementById('auth-token-field').value = jc.token_response_field;
+    }
+
+    // Inference endpoints
+    endpointCounter = 0;
+    const container = document.getElementById('endpoints-list');
+    container.innerHTML = '';
+    if (infMods.length > 0) {
+        infMods.forEach(m => addEndpointFromModule(m));
+    } else {
+        addEndpoint();
+    }
+}
+
+function addEndpointFromModule(mod) {
+    const cfg = mod.config || {};
+    // Try to extract path
+    let path = cfg.path || cfg.route || cfg.endpoint || mod.name;
+    // If it looks like a full URL, extract just the path
+    try { path = new URL(path).pathname.replace(/^\//, ''); } catch(e) { path = path.replace(/^\//, ''); }
+
+    // Build body template — always include template_name
+    let templateName = cfg.template_name || cfg.template
+        || (cfg.prompts && Array.isArray(cfg.prompts) && cfg.prompts.length > 0 ? cfg.prompts[0].name : null)
+        || mod.name;
+    let bodyTemplate = { template_name: templateName, user_input: '{{message}}' };
+
+    addEndpoint(mod.name, path, bodyTemplate, 'choices.0.message.content');
+}
+
+function addEndpoint(name, path, bodyTemplate, responseField) {
+    const idx = endpointCounter++;
+    name = name || '';
+    path = path || '';
+    bodyTemplate = bodyTemplate || { user_input: '{{message}}' };
+    responseField = responseField || 'choices.0.message.content';
+
+    const container = document.getElementById('endpoints-list');
+    const div = document.createElement('div');
+    div.className = 'p-4 rounded-lg border border-slate-200 bg-slate-50 space-y-3';
+    div.id = `ep-${idx}`;
+    div.innerHTML = `
+        <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500 uppercase">Endpoint #${idx + 1}</span>
+            <button onclick="this.closest('[id^=ep-]').remove()" class="text-xs text-red-400 hover:text-red-600">&times; Remove</button>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Name</label>
+                <input type="text" value="${name}" data-field="name"
+                       class="ep-field w-full px-3 py-1.5 rounded border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">FD Path (after /{project}/)</label>
+                <input type="text" value="${path}" data-field="path"
+                       class="ep-field w-full px-3 py-1.5 rounded border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+            </div>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-500 mb-1">Body Template (JSON, use {{message}} for user input)</label>
+            <textarea rows="3" data-field="body_template"
+                      class="ep-field w-full px-3 py-1.5 rounded border border-slate-300 text-sm focus:outline-none focus:border-amber-500">${JSON.stringify(bodyTemplate, null, 2)}</textarea>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-500 mb-1">Response Field (dot-notation, e.g. choices.0.message.content)</label>
+            <input type="text" value="${responseField}" data-field="response_field"
+                   class="ep-field w-full px-3 py-1.5 rounded border border-slate-300 text-sm focus:outline-none focus:border-amber-500">
+        </div>`;
+    container.appendChild(div);
+}
+
+// ── Step 4: Activate and redirect ──────────────────────────────────────
+async function activate() {
+    hideError('activate-error');
+    const btn = document.getElementById('activate-btn');
+    btn.disabled = true;
+
+    // Collect endpoints from the form
+    const endpoints = [];
+    document.querySelectorAll('[id^="ep-"]').forEach(div => {
+        const fields = {};
+        div.querySelectorAll('.ep-field').forEach(input => {
+            const key = input.dataset.field;
+            if (key === 'body_template') {
+                try { fields[key] = JSON.parse(input.value); } catch(e) { fields[key] = { user_input: '{{message}}' }; }
+            } else {
+                fields[key] = input.value;
+            }
+        });
+        if (fields.name && fields.path) endpoints.push(fields);
+    });
+
+    if (endpoints.length === 0) {
+        showError('activate-error', 'Add at least one endpoint to test.');
+        btn.disabled = false; return;
+    }
+
+    const payload = {
+        project_name: currentProject,
+        display_name: currentManifest?.name || currentProject,
+        fd_base: fdBase(),
+        auth: {
+            path: document.getElementById('auth-path').value,
+            token_response_field: document.getElementById('auth-token-field').value,
+        },
+        endpoints: endpoints,
+    };
+
+    try {
+        const resp = await fetch('/api/activate-manifest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        window.location.href = data.login_url;
+    } catch (e) {
+        showError('activate-error', `Activation failed: ${e.message}`);
+        btn.disabled = false;
+    }
+}
+</script>
+</body>
+</html>
