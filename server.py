@@ -183,6 +183,24 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 FD_BASE_URL = os.getenv("FD_BASE_URL", "http://127.0.0.1:8080")
 CT_BASE_URL = os.getenv("CT_BASE_URL", "http://127.0.0.1:8000")
 CT_MANIFESTS_DIR = os.getenv("CT_MANIFESTS_DIR", "")
+TRACE_ENABLED = os.getenv("UI_GEN_TRACE", os.getenv("TRACE", "false")).strip().lower() in {"1", "true", "yes", "on"}
+SSL_VERIFY = os.getenv("UI_GEN_SSL_VERIFY", os.getenv("SSL_VERIFY", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _curl_escape_single_quotes(value: str) -> str:
+    """Escape single quotes for safe use in single-quoted curl arguments."""
+    return value.replace("'", "'\"'\"'")
+
+
+def build_curl_command(method: str, url: str, headers: Dict[str, str], body: Any) -> str:
+    """Build a curl command that can be re-used for debugging."""
+    cmd_parts = [f"curl -X {method.upper()} '{_curl_escape_single_quotes(url)}'"]
+    for k, v in headers.items():
+        cmd_parts.append(f"  -H '{_curl_escape_single_quotes(str(k))}: {_curl_escape_single_quotes(str(v))}'")
+    if body is not None:
+        body_json = json.dumps(body, ensure_ascii=False)
+        cmd_parts.append(f"  --data-raw '{_curl_escape_single_quotes(body_json)}'")
+    return " \\\n".join(cmd_parts)
 
 def verify_admin(request: Request):
     """Verify admin credentials from session cookie or raise 401."""
@@ -262,7 +280,7 @@ async def api_list_projects(fd_base: str = None):
     """Proxy to Front Door to list available projects."""
     fd_base = fd_base or FD_BASE_URL
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, verify=SSL_VERIFY) as client:
             resp = await client.get(
                 f"{fd_base.rstrip('/')}/admin/projects",
                 headers={"Accept": "application/json"},
@@ -277,7 +295,7 @@ async def api_get_manifest(name: str, ct_base: str = None,
     """Proxy to Control Tower to get a specific manifest."""
     ct_base = ct_base or CT_BASE_URL
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, verify=SSL_VERIFY) as client:
             resp = await client.get(
                 f"{ct_base.rstrip('/')}/manifests/{name}",
                 params={"resolve_env": str(resolve_env).lower()},
@@ -568,8 +586,38 @@ async def login_submit(request: Request, slug: str,
                     auth.password_field: password,
                     **auth.extra_fields,
                 }
-                async with httpx.AsyncClient(timeout=15) as client:
+                trace_auth_request = {
+                    "method": "POST",
+                    "url": auth_url,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": payload,
+                }
+                trace_auth_request["curl"] = build_curl_command(
+                    trace_auth_request["method"],
+                    trace_auth_request["url"],
+                    trace_auth_request["headers"],
+                    trace_auth_request["body"],
+                )
+                if TRACE_ENABLED:
+                    logger.info(
+                        "trace.auth.request.pre_submit=%s",
+                        json.dumps(trace_auth_request, ensure_ascii=False),
+                    )
+                async with httpx.AsyncClient(timeout=15, verify=SSL_VERIFY) as client:
                     resp = await client.post(auth_url, json=payload)
+                if TRACE_ENABLED:
+                    logger.info(
+                        "trace.auth.request=%s trace.auth.response=%s",
+                        json.dumps(trace_auth_request, ensure_ascii=False),
+                        json.dumps(
+                            {
+                                "status_code": resp.status_code,
+                                "headers": dict(resp.headers),
+                                "body": resp.text,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
                 if resp.status_code == 200:
                     data = resp.json()
                     backend_token = data.get(auth.token_response_field)
@@ -674,10 +722,39 @@ async def chat_send(request: Request, slug: str):
     req_body = substitute(ep.body_template, user_message, backend_token, params) if ep.body_template else {"query": user_message}
     req_headers = {k: substitute(v, user_message, backend_token, params) for k, v in ep.headers.items()}
     req_url = substitute(ep.url, user_message, backend_token, params)
+    trace_request = {
+        "method": ep.method.upper(),
+        "url": req_url,
+        "headers": req_headers,
+        "body": req_body,
+        "token": backend_token,
+    }
+    trace_request["curl"] = build_curl_command(
+        trace_request["method"],
+        trace_request["url"],
+        trace_request["headers"],
+        trace_request["body"],
+    )
+    if TRACE_ENABLED:
+        logger.info(
+            "trace.chat.request.pre_submit=%s",
+            json.dumps(trace_request, ensure_ascii=False),
+        )
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, verify=SSL_VERIFY) as client:
             resp = await client.request(ep.method, req_url, json=req_body, headers=req_headers)
+        trace_response = {
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "body": resp.text,
+        }
+        if TRACE_ENABLED:
+            logger.info(
+                "trace.chat.request=%s trace.chat.response=%s",
+                json.dumps(trace_request, ensure_ascii=False),
+                json.dumps(trace_response, ensure_ascii=False),
+            )
         if resp.status_code == 200:
             data = resp.json()
             def extract_field(data, field_path: str):
@@ -703,14 +780,40 @@ async def chat_send(request: Request, slug: str):
                         "type": item.type,
                         "value": val,
                     })
-                return JSONResponse({"response": str(extract_field(data, ep.response_field)), "display": display_items})
+                result = {"response": str(extract_field(data, ep.response_field)), "display": display_items}
+                if TRACE_ENABLED:
+                    result["trace"] = {
+                        "request": trace_request,
+                        "response": trace_response,
+                    }
+                return JSONResponse(result)
 
             answer = extract_field(data, ep.response_field)
-            return JSONResponse({"response": str(answer)})
+            result = {"response": str(answer)}
+            if TRACE_ENABLED:
+                result["trace"] = {
+                    "request": trace_request,
+                    "response": trace_response,
+                }
+            return JSONResponse(result)
         else:
-            return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})
+            result = {"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"}
+            if TRACE_ENABLED:
+                result["trace"] = {
+                    "request": trace_request,
+                    "response": trace_response,
+                }
+            return JSONResponse(result)
     except httpx.RequestError as e:
-        return JSONResponse({"response": f"Could not reach backend: {e}"})
+        result = {"response": f"Could not reach backend: {e}"}
+        if TRACE_ENABLED:
+            result["trace"] = {
+                "request": trace_request,
+                "response": {
+                    "error": str(e),
+                },
+            }
+        return JSONResponse(result)
 
 # ---------------------------------------------------------------------------
 # Routes – logout

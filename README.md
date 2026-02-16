@@ -92,6 +92,12 @@ All types create a local session cookie. For `jwt_endpoint`/`ldap`, the backend 
 ## Environment Variables
 
 - `UI_GEN_JWT_SECRET` — Secret for local session tokens (default: dev secret)
+- `UI_GEN_TRACE` — Enable request/response tracing (`true`/`false`, default: `false`).
+  - When enabled, `/{slug}/chat/send` responses include a `trace` object with:
+    - `request.method`, `request.url`, `request.headers`, `request.body`, `request.token`
+    - `request.curl` (copy/paste-ready curl command)
+    - `response.status_code`, `response.headers`, `response.body`
+- `UI_GEN_SSL_VERIFY` — Enable TLS certificate verification for outbound HTTP calls (`true`/`false`, default: `true`).
 
 ## Integration with DSP Stack
 
