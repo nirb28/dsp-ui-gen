@@ -185,6 +185,7 @@ CT_BASE_URL = os.getenv("CT_BASE_URL", "http://127.0.0.1:8000")
 CT_MANIFESTS_DIR = os.getenv("CT_MANIFESTS_DIR", "")
 TRACE_ENABLED = os.getenv("UI_GEN_TRACE", os.getenv("TRACE", "false")).strip().lower() in {"1", "true", "yes", "on"}
 SSL_VERIFY = os.getenv("UI_GEN_SSL_VERIFY", os.getenv("SSL_VERIFY", "true")).strip().lower() in {"1", "true", "yes", "on"}
+BACKEND_TOKENS: Dict[str, Dict[str, Any]] = {}
 
 
 def _curl_escape_single_quotes(value: str) -> str:
@@ -201,6 +202,33 @@ def build_curl_command(method: str, url: str, headers: Dict[str, str], body: Any
         body_json = json.dumps(body, ensure_ascii=False)
         cmd_parts.append(f"  --data-raw '{_curl_escape_single_quotes(body_json)}'")
     return " \\\n".join(cmd_parts)
+
+
+def store_backend_token(token: str, max_age_seconds: int) -> str:
+    """Store backend token server-side and return a compact reference key for cookies."""
+    ref = secrets.token_urlsafe(32)
+    BACKEND_TOKENS[ref] = {
+        "token": token,
+        "expires_at": datetime.now(timezone.utc) + timedelta(seconds=max_age_seconds),
+    }
+    return ref
+
+
+def get_backend_token_by_ref(ref: str) -> str:
+    """Resolve backend token by reference key and cleanup expired records."""
+    item = BACKEND_TOKENS.get(ref)
+    if not item:
+        return ""
+    if datetime.now(timezone.utc) >= item["expires_at"]:
+        BACKEND_TOKENS.pop(ref, None)
+        return ""
+    return str(item.get("token", ""))
+
+
+def delete_backend_token_ref(ref: str) -> None:
+    """Delete backend token reference from in-memory store."""
+    if ref:
+        BACKEND_TOKENS.pop(ref, None)
 
 def verify_admin(request: Request):
     """Verify admin credentials from session cookie or raise 401."""
@@ -644,10 +672,19 @@ async def login_submit(request: Request, slug: str,
     response = RedirectResponse(redirect_url, status_code=302)
     response.set_cookie("session_token", session_token, httponly=True, samesite="lax",
                          max_age=auth.session_duration_minutes * 60)
-    # Store backend JWT separately so chat can use it
+    # Store backend JWT server-side and keep only a compact ref in cookie
     if backend_token:
-        response.set_cookie("backend_token", backend_token, httponly=True, samesite="lax",
-                             max_age=auth.session_duration_minutes * 60)
+        existing_ref = request.cookies.get("backend_token_ref", "")
+        delete_backend_token_ref(existing_ref)
+        token_max_age = auth.session_duration_minutes * 60
+        token_ref = store_backend_token(backend_token, token_max_age)
+        response.set_cookie("backend_token_ref", token_ref, httponly=True, samesite="lax",
+                             max_age=token_max_age)
+        response.delete_cookie("backend_token")
+    else:
+        delete_backend_token_ref(request.cookies.get("backend_token_ref", ""))
+        response.delete_cookie("backend_token_ref")
+        response.delete_cookie("backend_token")
     # Persist params in cookie so they survive across requests
     if params:
         response.set_cookie("ui_params", json.dumps(params), httponly=True, samesite="lax",
@@ -692,7 +729,10 @@ async def chat_send(request: Request, slug: str):
     body = await request.json()
     user_message = body.get("message", "")
     endpoint_name = body.get("endpoint", "default")
-    backend_token = request.cookies.get("backend_token", "")
+    backend_token_ref = request.cookies.get("backend_token_ref", "")
+    backend_token = get_backend_token_by_ref(backend_token_ref) if backend_token_ref else ""
+    if not backend_token:
+        backend_token = request.cookies.get("backend_token", "")
 
     # Find the target endpoint config
     ep = next((e for e in cfg.chat.endpoints if e.name == endpoint_name), None)
@@ -819,9 +859,11 @@ async def chat_send(request: Request, slug: str):
 # Routes – logout
 # ---------------------------------------------------------------------------
 @app.get("/{slug}/logout")
-async def logout(slug: str):
+async def logout(request: Request, slug: str):
     response = RedirectResponse(f"/{slug}/login", status_code=302)
+    delete_backend_token_ref(request.cookies.get("backend_token_ref", ""))
     response.delete_cookie("session_token")
+    response.delete_cookie("backend_token_ref")
     response.delete_cookie("backend_token")
     return response
 
