@@ -4,6 +4,7 @@ Serves different UI experiences (login + chatbot flows) from YAML configs.
 """
 import os
 import json
+import re
 import secrets
 import yaml
 import httpx
@@ -105,6 +106,49 @@ class AppConfig(BaseModel):
 CONFIGS: Dict[str, AppConfig] = {}
 CONFIG_DIR = Path(__file__).parent / "configs"
 
+def list_ct_manifests() -> List[Dict[str, Any]]:
+    """List CT manifest files from configured directory."""
+    items: List[Dict[str, Any]] = []
+    if not CT_MANIFESTS_DIR:
+        return items
+    manifest_dir = Path(CT_MANIFESTS_DIR)
+    if not manifest_dir.exists() or not manifest_dir.is_dir():
+        logger.warning(f"CT_MANIFESTS_DIR does not exist or is not a directory: {manifest_dir}")
+        return items
+
+    for f in sorted(manifest_dir.glob("*.json")):
+        item: Dict[str, Any] = {
+            "name": f.stem,
+            "file_name": f.name,
+            "title": f.stem,
+            "modules": None,
+            "environment": "",
+            "valid": True,
+        }
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8"))
+            item["title"] = raw.get("name") or raw.get("project_name") or raw.get("project_id") or f.stem
+            modules = raw.get("modules")
+            if isinstance(modules, list):
+                item["modules"] = len(modules)
+            env = raw.get("environment")
+            if isinstance(env, str):
+                item["environment"] = env
+        except Exception:
+            item["valid"] = False
+        items.append(item)
+    return items
+
+def get_ct_manifest_path(name: str) -> Path:
+    """Resolve a safe CT manifest file path from manifest name."""
+    if not CT_MANIFESTS_DIR:
+        raise HTTPException(400, "CT_MANIFESTS_DIR is not configured in .env")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise HTTPException(400, "Invalid manifest name")
+
+    manifest_dir = Path(CT_MANIFESTS_DIR)
+    return manifest_dir / f"{name}.json"
+
 def load_configs():
     """Load all YAML configs from the configs/ directory."""
     CONFIGS.clear()
@@ -138,6 +182,7 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 FD_BASE_URL = os.getenv("FD_BASE_URL", "http://127.0.0.1:8080")
 CT_BASE_URL = os.getenv("CT_BASE_URL", "http://127.0.0.1:8000")
+CT_MANIFESTS_DIR = os.getenv("CT_MANIFESTS_DIR", "")
 
 def verify_admin(request: Request):
     """Verify admin credentials from session cookie or raise 401."""
@@ -335,6 +380,8 @@ async def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {
         "request": request,
         "configs": CONFIGS,
+        "manifests": list_ct_manifests(),
+        "ct_manifest_dir": CT_MANIFESTS_DIR,
     })
 
 @app.get("/admin/config/{slug}")
@@ -371,6 +418,67 @@ async def admin_save_config(request: Request, slug: str):
     logger.info(f"Admin saved config: {slug} -> {cfg.name}")
     return JSONResponse({"status": "ok", "slug": slug, "name": cfg.name})
 
+@app.get("/admin/manifests")
+async def admin_list_manifests(request: Request):
+    """List CT manifests from configured directory."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    return JSONResponse({
+        "manifest_dir": CT_MANIFESTS_DIR,
+        "manifests": list_ct_manifests(),
+    })
+
+@app.get("/admin/manifest/{name}")
+async def admin_get_manifest(request: Request, name: str):
+    """Return raw JSON content for a CT manifest."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    manifest_path = get_ct_manifest_path(name)
+    if not manifest_path.exists():
+        raise HTTPException(404, f"Manifest '{name}' not found")
+
+    return JSONResponse({
+        "name": name,
+        "content": manifest_path.read_text(encoding="utf-8"),
+        "format": "json",
+        "source": "ct_manifest",
+        "path": str(manifest_path),
+    })
+
+@app.put("/admin/manifest/{name}")
+async def admin_save_manifest(request: Request, name: str):
+    """Save JSON content for a CT manifest file."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    body = await request.json()
+    content = body.get("content", "")
+    if not content.strip():
+        raise HTTPException(400, "Empty manifest content")
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid JSON: {e}")
+
+    manifest_path = get_ct_manifest_path(name)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(parsed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    title = parsed.get("name") or parsed.get("project_name") or parsed.get("project_id") or name
+    logger.info(f"Admin saved CT manifest: {manifest_path}")
+    return JSONResponse({"status": "ok", "name": name, "title": title})
+
+@app.post("/admin/manifest/{name}/delete")
+async def admin_delete_manifest(request: Request, name: str):
+    """Delete a CT manifest file."""
+    if not verify_admin(request):
+        raise HTTPException(401, "Not authenticated")
+    manifest_path = get_ct_manifest_path(name)
+    if manifest_path.exists():
+        manifest_path.unlink()
+    logger.info(f"Admin deleted CT manifest: {manifest_path}")
+    return JSONResponse({"status": "ok"})
+
 @app.post("/admin/config/{slug}/delete")
 async def admin_delete_config(request: Request, slug: str):
     """Delete a config file and remove from memory."""
@@ -389,7 +497,11 @@ async def admin_reload(request: Request):
     if not verify_admin(request):
         raise HTTPException(401, "Not authenticated")
     load_configs()
-    return JSONResponse({"status": "ok", "configs": list(CONFIGS.keys())})
+    return JSONResponse({
+        "status": "ok",
+        "configs": list(CONFIGS.keys()),
+        "manifests": len(list_ct_manifests()),
+    })
 
 # ---------------------------------------------------------------------------
 # Routes – login

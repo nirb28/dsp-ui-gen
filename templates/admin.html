@@ -11,7 +11,9 @@
         body { font-family: 'Inter', system-ui, sans-serif; margin: 0; }
         .editor-font { font-family: 'JetBrains Mono', 'Consolas', monospace; }
         .config-card { transition: all 0.2s; }
+        .manifest-card { transition: all 0.2s; }
         .config-card:hover { border-color: #3b82f6; }
+        .manifest-card:hover { border-color: #22c55e; }
         .toast { animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s; }
         @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
@@ -19,6 +21,26 @@
         .status-dot { width: 8px; height: 8px; border-radius: 50%; }
         .status-file { background: #22c55e; }
         .status-dynamic { background: #f59e0b; }
+        .status-invalid { background: #ef4444; }
+        .tab-btn-active { background: #1d4ed8; color: #ffffff; }
+        .tab-btn-inactive { color: #94a3b8; }
+        .tab-btn-inactive:hover { color: #e2e8f0; }
+
+        /* Collapsible JSON tree view */
+        #json-tree { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 0.8rem; line-height: 1.45; }
+        #json-tree details { margin-left: 10px; padding-left: 8px; border-left: 1px dashed #334155; }
+        #json-tree summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+        #json-tree summary::-webkit-details-marker { display: none; }
+        #json-tree summary::before { content: '▸'; color: #94a3b8; transition: transform 0.15s ease; }
+        #json-tree details[open] > summary::before { transform: rotate(90deg); }
+        #json-tree .json-key { color: #93c5fd; }
+        #json-tree .json-struct { color: #f59e0b; }
+        #json-tree .json-meta { color: #94a3b8; font-size: 0.72rem; }
+        #json-tree .json-leaf { margin-left: 18px; padding: 1px 0; }
+        #json-tree .json-str { color: #86efac; }
+        #json-tree .json-num { color: #fca5a5; }
+        #json-tree .json-bool { color: #c4b5fd; }
+        #json-tree .json-null { color: #94a3b8; font-style: italic; }
     </style>
 </head>
 <body class="min-h-screen bg-slate-900 text-white">
@@ -71,25 +93,73 @@
 
     <!-- Main layout: sidebar + editor -->
     <div class="max-w-7xl mx-auto flex" style="height: calc(100vh - 56px);">
-        <!-- Sidebar: config list -->
-        <aside id="sidebar" class="w-72 flex-shrink-0 border-r border-slate-700 overflow-y-auto p-4 space-y-2">
-            {% for slug, cfg in configs.items() %}
-            <div class="config-card rounded-lg border border-slate-700 bg-slate-800 p-3 cursor-pointer"
-                 data-slug="{{ slug }}" onclick="loadConfig('{{ slug }}')">
-                <div class="flex items-center gap-2 mb-1">
-                    <div class="status-dot status-file" title="File-based config"></div>
-                    <span class="font-medium text-sm truncate">{{ cfg.name }}</span>
-                </div>
-                <div class="flex items-center gap-2 text-xs text-slate-400">
-                    <span class="px-1.5 py-0.5 rounded bg-slate-700">{{ slug }}</span>
-                    <span>{{ cfg.chat.endpoints|length }} ep</span>
-                    <span>{{ cfg.auth.type }}</span>
-                </div>
+        <!-- Sidebar: config + manifest lists -->
+        <aside id="sidebar" class="w-72 flex-shrink-0 border-r border-slate-700 overflow-y-auto p-4">
+            <div class="mb-3 rounded-lg bg-slate-800 p-1 flex items-center gap-1">
+                <button id="tab-configs" onclick="switchSidebarTab('configs')"
+                        class="flex-1 text-xs px-2 py-1.5 rounded-md font-medium tab-btn-active">
+                    UI Configs
+                </button>
+                <button id="tab-manifests" onclick="switchSidebarTab('manifests')"
+                        class="flex-1 text-xs px-2 py-1.5 rounded-md font-medium tab-btn-inactive">
+                    CT Manifests
+                </button>
             </div>
-            {% endfor %}
-            {% if not configs %}
-            <div class="text-center text-slate-500 text-sm py-8">No configs loaded</div>
-            {% endif %}
+
+            <div id="configs-list" class="space-y-2">
+                {% for slug, cfg in configs.items() %}
+                <div class="config-card rounded-lg border border-slate-700 bg-slate-800 p-3 cursor-pointer"
+                     data-slug="{{ slug }}" onclick="loadConfig(this.dataset.slug)">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="status-dot status-file" title="File-based config"></div>
+                        <span class="font-medium text-sm truncate">{{ cfg.name }}</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs text-slate-400">
+                        <span class="px-1.5 py-0.5 rounded bg-slate-700">{{ slug }}</span>
+                        <span>{{ cfg.chat.endpoints|length }} ep</span>
+                        <span>{{ cfg.auth.type }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+                {% if not configs %}
+                <div class="text-center text-slate-500 text-sm py-8">No configs loaded</div>
+                {% endif %}
+            </div>
+
+            <div id="manifests-list" class="hidden space-y-2">
+                <div class="text-[11px] text-slate-500 px-1 pb-1 break-all">
+                    {% if ct_manifest_dir %}
+                    {{ ct_manifest_dir }}
+                    {% else %}
+                    CT_MANIFESTS_DIR is not configured in .env
+                    {% endif %}
+                </div>
+                {% for manifest in manifests %}
+                <div class="manifest-card rounded-lg border border-slate-700 bg-slate-800 p-3 cursor-pointer"
+                     data-manifest="{{ manifest.name }}" onclick="loadManifest(this.dataset.manifest)">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="status-dot {% if manifest.valid %}status-file{% else %}status-invalid{% endif %}"
+                             title="{% if manifest.valid %}Valid manifest{% else %}Invalid JSON{% endif %}"></div>
+                        <span class="manifest-title font-medium text-sm truncate">{{ manifest.title }}</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                        <span class="px-1.5 py-0.5 rounded bg-slate-700">{{ manifest.file_name }}</span>
+                        {% if manifest.modules is not none %}
+                        <span>{{ manifest.modules }} mod</span>
+                        {% endif %}
+                        {% if manifest.environment %}
+                        <span>{{ manifest.environment }}</span>
+                        {% endif %}
+                        {% if not manifest.valid %}
+                        <span class="text-red-400">invalid json</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                {% if not manifests %}
+                <div class="text-center text-slate-500 text-sm py-8">No manifests found</div>
+                {% endif %}
+            </div>
         </aside>
 
         <!-- Editor panel -->
@@ -109,11 +179,15 @@
                         </svg>
                         Save
                     </button>
-                    <button onclick="openInChat()"
+                    <button id="toggle-tree-btn" onclick="toggleTreeView()"
+                            class="hidden text-xs px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-medium transition-colors">
+                        Tree View
+                    </button>
+                    <button id="open-chat-btn" onclick="openInChat()"
                             class="text-xs px-3 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-white font-medium transition-colors">
                         Open Chat
                     </button>
-                    <button onclick="deleteConfig()"
+                    <button id="delete-btn" onclick="deleteConfig()"
                             class="text-xs px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-600 text-white font-medium transition-colors">
                         Delete
                     </button>
@@ -128,8 +202,8 @@
                         <svg class="w-12 h-12 mx-auto mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                         </svg>
-                        <p class="text-sm">Select a config from the sidebar to edit</p>
-                        <p class="text-xs mt-1">or create a new one</p>
+                        <p class="text-sm">Select a UI config or CT manifest from the sidebar</p>
+                        <p class="text-xs mt-1">then edit raw content or view manifests as a collapsible tree</p>
                     </div>
                 </div>
 
@@ -138,6 +212,18 @@
                           class="hidden flex-1 w-full bg-slate-950 text-slate-200 editor-font editor-area p-4 resize-none focus:outline-none border-none text-sm"
                           spellcheck="false"
                           wrap="off"></textarea>
+
+                <!-- Collapsible JSON tree for manifests -->
+                <div id="json-tree-panel" class="hidden flex-1 overflow-auto bg-slate-950 p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="text-xs text-slate-400">Collapsible Manifest View</div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="expandJsonTree()" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Expand all</button>
+                            <button onclick="collapseJsonTree()" class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Collapse all</button>
+                        </div>
+                    </div>
+                    <div id="json-tree"></div>
+                </div>
 
                 <!-- Validation status -->
                 <div id="validation-bar" class="hidden flex-shrink-0 border-t border-slate-700 bg-slate-800/50 px-4 py-2 flex items-center gap-2">
@@ -173,167 +259,416 @@
     </div>
 
 <script>
-let currentSlug = null;
-let originalYaml = '';
+let currentType = null; // config | manifest
+let currentId = null;
+let currentFormat = 'yaml'; // yaml | json
+let originalContent = '';
+let treeViewEnabled = false;
 
 const editor = document.getElementById('yaml-editor');
 const placeholder = document.getElementById('editor-placeholder');
 const toolbar = document.getElementById('editor-toolbar');
 const validationBar = document.getElementById('validation-bar');
+const openChatBtn = document.getElementById('open-chat-btn');
+const toggleTreeBtn = document.getElementById('toggle-tree-btn');
+const jsonTreePanel = document.getElementById('json-tree-panel');
+const jsonTreeRoot = document.getElementById('json-tree');
 
-document.getElementById('config-count').textContent = `${document.querySelectorAll('.config-card').length} configs`;
+function findCard(attrName, value) {
+    return Array.from(document.querySelectorAll(`[${attrName}]`)).find((el) => el.getAttribute(attrName) === value) || null;
+}
 
-// --- Config loading ---
+function updateCount() {
+    const cfgCount = document.querySelectorAll('.config-card').length;
+    const manifestCount = document.querySelectorAll('.manifest-card').length;
+    document.getElementById('config-count').textContent = `${cfgCount} configs • ${manifestCount} manifests`;
+}
+
+function switchSidebarTab(tab) {
+    const cfgBtn = document.getElementById('tab-configs');
+    const mfBtn = document.getElementById('tab-manifests');
+    const cfgList = document.getElementById('configs-list');
+    const mfList = document.getElementById('manifests-list');
+
+    const showConfigs = tab === 'configs';
+
+    cfgBtn.classList.toggle('tab-btn-active', showConfigs);
+    cfgBtn.classList.toggle('tab-btn-inactive', !showConfigs);
+    mfBtn.classList.toggle('tab-btn-active', !showConfigs);
+    mfBtn.classList.toggle('tab-btn-inactive', showConfigs);
+
+    cfgList.classList.toggle('hidden', !showConfigs);
+    mfList.classList.toggle('hidden', showConfigs);
+}
+
+function clearSelection() {
+    document.querySelectorAll('.config-card, .manifest-card').forEach((card) => {
+        card.classList.remove('ring-2', 'ring-blue-500', 'ring-emerald-500');
+    });
+}
+
+function resetEditor() {
+    currentType = null;
+    currentId = null;
+    currentFormat = 'yaml';
+    originalContent = '';
+    treeViewEnabled = false;
+
+    editor.value = '';
+    editor.classList.add('hidden');
+    jsonTreePanel.classList.add('hidden');
+    placeholder.classList.remove('hidden');
+
+    toolbar.classList.add('hidden');
+    toolbar.classList.remove('flex');
+    validationBar.classList.add('hidden');
+    validationBar.classList.remove('flex');
+
+    toggleTreeBtn.classList.add('hidden');
+    openChatBtn.classList.remove('hidden');
+}
+
+function applyEditorState(content, options) {
+    currentType = options.type;
+    currentId = options.id;
+    currentFormat = options.format;
+    originalContent = content;
+    treeViewEnabled = false;
+
+    editor.value = content;
+    editor.classList.remove('hidden');
+    jsonTreePanel.classList.add('hidden');
+    placeholder.classList.add('hidden');
+    toolbar.classList.remove('hidden');
+    toolbar.classList.add('flex');
+    validationBar.classList.remove('hidden');
+    validationBar.classList.add('flex');
+
+    document.getElementById('editor-slug').textContent = options.type === 'manifest' ? `manifest/${options.id}` : options.id;
+    document.getElementById('editor-source').textContent = options.type === 'manifest' ? 'CT MANIFEST' : (options.source === 'file' ? 'FILE CONFIG' : 'DYNAMIC CONFIG');
+    document.getElementById('editor-dirty').classList.add('hidden');
+
+    openChatBtn.classList.toggle('hidden', options.type !== 'config');
+    toggleTreeBtn.classList.toggle('hidden', options.type !== 'manifest');
+    toggleTreeBtn.textContent = 'Tree View';
+
+    validateContent();
+}
+
 async function loadConfig(slug) {
-    // Highlight sidebar
-    document.querySelectorAll('.config-card').forEach(c => c.classList.remove('ring-2', 'ring-blue-500'));
-    const card = document.querySelector(`[data-slug="${slug}"]`);
+    clearSelection();
+    const card = findCard('data-slug', slug);
     if (card) card.classList.add('ring-2', 'ring-blue-500');
 
     try {
-        const resp = await fetch(`/admin/config/${slug}`);
+        const resp = await fetch(`/admin/config/${encodeURIComponent(slug)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-
-        currentSlug = slug;
-        originalYaml = data.yaml;
-
-        editor.value = data.yaml;
-        editor.classList.remove('hidden');
-        placeholder.classList.add('hidden');
-        toolbar.classList.remove('hidden');
-        toolbar.classList.add('flex');
-        validationBar.classList.remove('hidden');
-        validationBar.classList.add('flex');
-
-        document.getElementById('editor-slug').textContent = slug;
-        document.getElementById('editor-source').textContent = data.source === 'file' ? 'FILE' : 'DYNAMIC';
-        document.getElementById('editor-dirty').classList.add('hidden');
-
-        validateYaml();
+        applyEditorState(data.yaml, { type: 'config', id: slug, source: data.source, format: 'yaml' });
     } catch (err) {
-        showToast(`Failed to load ${slug}: ${err.message}`, 'error');
+        showToast(`Failed to load config ${slug}: ${err.message}`, 'error');
     }
 }
 
-// --- Mark dirty ---
+async function loadManifest(name) {
+    clearSelection();
+    switchSidebarTab('manifests');
+    const card = findCard('data-manifest', name);
+    if (card) card.classList.add('ring-2', 'ring-emerald-500');
+
+    try {
+        const resp = await fetch(`/admin/manifest/${encodeURIComponent(name)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        applyEditorState(data.content, { type: 'manifest', id: name, source: data.source, format: 'json' });
+    } catch (err) {
+        showToast(`Failed to load manifest ${name}: ${err.message}`, 'error');
+    }
+}
+
 editor.addEventListener('input', () => {
-    const dirty = editor.value !== originalYaml;
+    const dirty = editor.value !== originalContent;
     document.getElementById('editor-dirty').classList.toggle('hidden', !dirty);
-    validateYaml();
+    validateContent();
+    if (currentType === 'manifest' && treeViewEnabled) {
+        renderJsonTree();
+    }
 });
 
-// --- YAML validation (basic) ---
-function validateYaml() {
+function validateContent() {
     const icon = document.getElementById('validation-icon');
     const msg = document.getElementById('validation-msg');
-    const yaml = editor.value.trim();
+    const content = editor.value;
 
-    if (!yaml) {
+    if (!content.trim()) {
         icon.textContent = '⚠';
         msg.textContent = 'Empty content';
         msg.className = 'text-xs text-amber-400';
         return false;
     }
 
-    // Check for basic YAML structure hints
-    if (yaml.includes('\t')) {
-        icon.textContent = '⚠';
-        msg.textContent = 'Warning: tabs detected (YAML uses spaces)';
-        msg.className = 'text-xs text-amber-400';
-        return true; // warning, not error
+    if (currentFormat === 'json') {
+        try {
+            JSON.parse(content);
+            icon.textContent = '✓';
+            msg.textContent = `Valid JSON • ${content.split('\n').length} lines`;
+            msg.className = 'text-xs text-emerald-400';
+            return true;
+        } catch (err) {
+            icon.textContent = '✗';
+            msg.textContent = `JSON error: ${err.message}`;
+            msg.className = 'text-xs text-red-400';
+            return false;
+        }
     }
 
-    const hasName = /^name:\s/m.test(yaml);
-    if (!hasName) {
+    // YAML light-weight hints
+    if (content.includes('\t')) {
         icon.textContent = '⚠';
-        msg.textContent = 'Warning: missing "name" field';
+        msg.textContent = 'Warning: tabs detected (YAML prefers spaces)';
         msg.className = 'text-xs text-amber-400';
         return true;
     }
 
     icon.textContent = '✓';
-    msg.textContent = `${yaml.split('\n').length} lines`;
+    msg.textContent = `${content.split('\n').length} lines`;
     msg.className = 'text-xs text-emerald-400';
     return true;
 }
 
-// --- Save ---
 async function saveConfig() {
-    if (!currentSlug) return;
+    if (!currentType || !currentId) return;
+
+    if (!validateContent()) {
+        showToast('Fix validation errors before saving', 'error');
+        return;
+    }
 
     try {
-        const resp = await fetch(`/admin/config/${currentSlug}`, {
+        const url = currentType === 'config'
+            ? `/admin/config/${encodeURIComponent(currentId)}`
+            : `/admin/manifest/${encodeURIComponent(currentId)}`;
+
+        const body = currentType === 'config'
+            ? { yaml: editor.value }
+            : { content: editor.value };
+
+        const resp = await fetch(url, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ yaml: editor.value }),
+            body: JSON.stringify(body),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || 'Save failed');
 
-        originalYaml = editor.value;
+        originalContent = editor.value;
         document.getElementById('editor-dirty').classList.add('hidden');
-        showToast(`Saved: ${data.name}`, 'success');
 
-        // Update sidebar card name
-        const card = document.querySelector(`[data-slug="${currentSlug}"]`);
-        if (card) {
-            const nameEl = card.querySelector('.font-medium');
-            if (nameEl) nameEl.textContent = data.name;
+        if (currentType === 'config') {
+            showToast(`Saved config: ${data.name || currentId}`, 'success');
+            const card = findCard('data-slug', currentId);
+            if (card) {
+                const nameEl = card.querySelector('.font-medium');
+                if (nameEl && data.name) nameEl.textContent = data.name;
+            }
+        } else {
+            showToast(`Saved manifest: ${data.title || currentId}`, 'success');
+            const card = findCard('data-manifest', currentId);
+            if (card) {
+                const titleEl = card.querySelector('.manifest-title');
+                if (titleEl && data.title) titleEl.textContent = data.title;
+            }
+            if (treeViewEnabled) renderJsonTree();
         }
     } catch (err) {
         showToast(`Save error: ${err.message}`, 'error');
     }
 }
 
-// --- Delete ---
 async function deleteConfig() {
-    if (!currentSlug) return;
-    if (!confirm(`Delete config "${currentSlug}"? This cannot be undone.`)) return;
+    if (!currentType || !currentId) return;
+
+    const noun = currentType === 'config' ? 'config' : 'manifest';
+    if (!confirm(`Delete ${noun} "${currentId}"? This cannot be undone.`)) return;
 
     try {
-        const resp = await fetch(`/admin/config/${currentSlug}/delete`, { method: 'POST' });
-        if (!resp.ok) throw new Error('Delete failed');
+        const url = currentType === 'config'
+            ? `/admin/config/${encodeURIComponent(currentId)}/delete`
+            : `/admin/manifest/${encodeURIComponent(currentId)}/delete`;
 
-        // Remove sidebar card
-        const card = document.querySelector(`[data-slug="${currentSlug}"]`);
+        const resp = await fetch(url, { method: 'POST' });
+        if (!resp.ok) {
+            let message = `Delete failed (HTTP ${resp.status})`;
+            try {
+                const data = await resp.json();
+                message = data.detail || message;
+            } catch (err) {
+                // Ignore JSON parse error and use default message.
+            }
+            throw new Error(message);
+        }
+
+        const attr = currentType === 'config' ? 'data-slug' : 'data-manifest';
+        const card = findCard(attr, currentId);
         if (card) card.remove();
 
-        // Reset editor
-        currentSlug = null;
-        editor.classList.add('hidden');
-        placeholder.classList.remove('hidden');
-        toolbar.classList.add('hidden');
-        toolbar.classList.remove('flex');
-        validationBar.classList.add('hidden');
-
-        showToast('Config deleted', 'success');
+        showToast(`${noun} deleted`, 'success');
         updateCount();
+        resetEditor();
     } catch (err) {
         showToast(`Delete error: ${err.message}`, 'error');
     }
 }
 
-// --- Reload all ---
 async function reloadAll() {
     try {
         const resp = await fetch('/admin/reload', { method: 'POST' });
         const data = await resp.json();
-        showToast(`Reloaded ${data.configs.length} configs`, 'success');
+        if (!resp.ok) throw new Error(data.detail || 'Reload failed');
+        showToast(`Reloaded ${data.configs.length} configs and ${data.manifests || 0} manifests`, 'success');
         setTimeout(() => location.reload(), 500);
     } catch (err) {
         showToast(`Reload error: ${err.message}`, 'error');
     }
 }
 
-// --- Open in chat ---
 function openInChat() {
-    if (currentSlug) window.open(`/${currentSlug}/login`, '_blank');
+    if (currentType === 'config' && currentId) {
+        window.open(`/${currentId}/login`, '_blank');
+    }
 }
 
-// --- New config ---
-function showNewConfigModal() { document.getElementById('new-config-modal').classList.remove('hidden'); }
-function hideNewConfigModal() { document.getElementById('new-config-modal').classList.add('hidden'); }
+function makeValueSpan(value) {
+    const span = document.createElement('span');
+    if (typeof value === 'string') {
+        span.className = 'json-str';
+        span.textContent = JSON.stringify(value);
+    } else if (typeof value === 'number') {
+        span.className = 'json-num';
+        span.textContent = String(value);
+    } else if (typeof value === 'boolean') {
+        span.className = 'json-bool';
+        span.textContent = String(value);
+    } else if (value === null) {
+        span.className = 'json-null';
+        span.textContent = 'null';
+    } else {
+        span.className = 'json-null';
+        span.textContent = String(value);
+    }
+    return span;
+}
+
+function buildJsonNode(key, value, depth = 0, root = false) {
+    if (value !== null && typeof value === 'object') {
+        const details = document.createElement('details');
+        if (root || depth < 2) details.open = true;
+
+        const summary = document.createElement('summary');
+        const keySpan = document.createElement('span');
+        keySpan.className = 'json-key';
+        keySpan.textContent = key;
+
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'json-struct';
+        if (Array.isArray(value)) {
+            typeSpan.textContent = '[ ]';
+        } else {
+            typeSpan.textContent = '{ }';
+        }
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'json-meta';
+        const size = Array.isArray(value) ? value.length : Object.keys(value).length;
+        metaSpan.textContent = `${size} item${size === 1 ? '' : 's'}`;
+
+        summary.appendChild(keySpan);
+        summary.appendChild(typeSpan);
+        summary.appendChild(metaSpan);
+        details.appendChild(summary);
+
+        if (Array.isArray(value)) {
+            value.forEach((item, index) => {
+                details.appendChild(buildJsonNode(`[${index}]`, item, depth + 1));
+            });
+        } else {
+            Object.entries(value).forEach(([childKey, childValue]) => {
+                details.appendChild(buildJsonNode(childKey, childValue, depth + 1));
+            });
+        }
+        return details;
+    }
+
+    const leaf = document.createElement('div');
+    leaf.className = 'json-leaf';
+
+    const keySpan = document.createElement('span');
+    keySpan.className = 'json-key';
+    keySpan.textContent = key;
+
+    leaf.appendChild(keySpan);
+    leaf.appendChild(document.createTextNode(': '));
+    leaf.appendChild(makeValueSpan(value));
+    return leaf;
+}
+
+function renderJsonTree() {
+    if (currentType !== 'manifest') return false;
+    jsonTreeRoot.innerHTML = '';
+
+    try {
+        const parsed = JSON.parse(editor.value);
+        jsonTreeRoot.appendChild(buildJsonNode('(root)', parsed, 0, true));
+        return true;
+    } catch (err) {
+        const errEl = document.createElement('div');
+        errEl.className = 'text-sm text-red-400';
+        errEl.textContent = `Cannot render tree: ${err.message}`;
+        jsonTreeRoot.appendChild(errEl);
+        return false;
+    }
+}
+
+function toggleTreeView() {
+    if (currentType !== 'manifest') return;
+    treeViewEnabled = !treeViewEnabled;
+
+    if (treeViewEnabled) {
+        if (!renderJsonTree()) {
+            treeViewEnabled = false;
+            showToast('Fix JSON before opening tree view', 'error');
+            return;
+        }
+        editor.classList.add('hidden');
+        jsonTreePanel.classList.remove('hidden');
+        toggleTreeBtn.textContent = 'Editor View';
+    } else {
+        jsonTreePanel.classList.add('hidden');
+        editor.classList.remove('hidden');
+        toggleTreeBtn.textContent = 'Tree View';
+    }
+}
+
+function expandJsonTree() {
+    document.querySelectorAll('#json-tree details').forEach((el) => {
+        el.open = true;
+    });
+}
+
+function collapseJsonTree() {
+    const nodes = Array.from(document.querySelectorAll('#json-tree details'));
+    nodes.forEach((el, idx) => {
+        el.open = idx === 0;
+    });
+}
+
+function showNewConfigModal() {
+    document.getElementById('new-config-modal').classList.remove('hidden');
+}
+
+function hideNewConfigModal() {
+    document.getElementById('new-config-modal').classList.add('hidden');
+}
 
 const DEFAULT_YAML = `name: "My Chatbot"
 description: "A new chatbot configuration"
@@ -381,7 +716,7 @@ async function createNewConfig() {
     const yamlContent = DEFAULT_YAML.replace('name: "My Chatbot"', `name: "${name}"`);
 
     try {
-        const resp = await fetch(`/admin/config/${slug}`, {
+        const resp = await fetch(`/admin/config/${encodeURIComponent(slug)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ yaml: yamlContent }),
@@ -390,14 +725,13 @@ async function createNewConfig() {
         if (!resp.ok) throw new Error(data.detail || 'Create failed');
 
         hideNewConfigModal();
-        showToast(`Created: ${name}`, 'success');
+        showToast(`Created config: ${name}`, 'success');
         setTimeout(() => location.reload(), 500);
     } catch (err) {
         showToast(`Create error: ${err.message}`, 'error');
     }
 }
 
-// --- Toast ---
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
@@ -408,17 +742,15 @@ function showToast(message, type = 'info') {
     setTimeout(() => toast.remove(), 3000);
 }
 
-function updateCount() {
-    document.getElementById('config-count').textContent = `${document.querySelectorAll('.config-card').length} configs`;
-}
-
-// Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         saveConfig();
     }
 });
+
+updateCount();
+switchSidebarTab('configs');
 </script>
 </body>
 </html>
