@@ -14,16 +14,24 @@
     .msg-content code { background: #e2e8f0; padding: 1px 5px; border-radius: 4px; font-size: 0.875em; }
     .msg-content pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
     .msg-content pre code { background: none; padding: 0; color: inherit; }
+    .msg-body-scroll { max-height: 480px; overflow-y: auto; padding-right: 4px; }
     .rich-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 6px 0; }
     .rich-table th, .rich-table td { border: 1px solid #cbd5e1; padding: 4px 8px; text-align: left; }
     .rich-table th { background: #f1f5f9; font-weight: 600; }
     .rich-label { font-size: 0.7rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; margin-bottom: 2px; }
-    .rich-json { background: #1e293b; color: #a5f3fc; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
-    .rich-code { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; }
+    .rich-json { background: #1e293b; color: #a5f3fc; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; max-height: 320px; overflow-y: auto; }
+    .rich-code { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; margin: 4px 0; max-height: 320px; overflow-y: auto; }
     .params-bar input { font-size: 0.75rem; }
     .code-input { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace; font-size: 0.8rem; tab-size: 4; line-height: 1.5; background: #1e293b; color: #e2e8f0; }
     .code-input::placeholder { color: #64748b; }
     .input-label { font-size: 0.7rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .msg-actions { display: flex; gap: 6px; margin-top: 6px; opacity: 0; transition: opacity 0.15s; }
+    .msg-user:hover .msg-actions, .msg-bot:hover .msg-actions { opacity: 1; }
+    .msg-action-btn { font-size: 0.65rem; padding: 2px 7px; border-radius: 4px; border: 1px solid #cbd5e1; background: #fff; color: #64748b; cursor: pointer; transition: background 0.1s, color 0.1s; }
+    .msg-action-btn:hover { background: #f1f5f9; color: #1e293b; }
+    .msg-action-btn.copied { background: #dcfce7; color: #16a34a; border-color: #86efac; }
+    .sample-btn { font-size: 0.72rem; padding: 3px 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; cursor: pointer; white-space: nowrap; transition: background 0.1s, border-color 0.1s; }
+    .sample-btn:hover { background: {{ cfg.theme.primary_color }}15; border-color: {{ cfg.theme.primary_color }}; color: {{ cfg.theme.primary_color }}; }
 </style>
 {% endblock %}
 {% block body %}
@@ -105,6 +113,28 @@
         </div>
     </div>
 
+    <!-- Samples panel -->
+    {% if cfg.chat.samples %}
+    <div id="samples-panel" class="flex-shrink-0 border-t border-slate-200 bg-white">
+        <div class="max-w-3xl mx-auto px-4 py-2">
+            <details>
+                <summary class="flex items-center gap-2 text-xs font-medium text-slate-500 hover:text-slate-700 select-none py-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    Sample Requests ({{ cfg.chat.samples|length }})
+                </summary>
+                <div class="flex flex-wrap gap-2 pt-2 pb-1">
+                    {% for s in cfg.chat.samples %}
+                    <button type="button" class="sample-btn"
+                            data-message="{{ s.message | e }}"
+                            data-endpoint="{{ s.endpoint | e }}"
+                            onclick="loadSample(this)">{{ s.label | e }}</button>
+                    {% endfor %}
+                </div>
+            </details>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Input area -->
     <div class="flex-shrink-0 border-t border-slate-200 bg-white">
         <div class="max-w-3xl mx-auto px-4 py-4">
@@ -162,6 +192,7 @@ const container = document.getElementById('msg-container');
 const messagesDiv = document.getElementById('messages');
 const sendBtn = document.getElementById('send-btn');
 const EP_DISPLAY = {{ ep_display_json | safe }};
+const SAMPLES = {{ samples_json | safe }};
 const INPUT_MODE = input.dataset.mode || 'text';
 const SUBMIT_ENTER = input.dataset.submitEnter === 'true';
 const MAX_ROWS = parseInt(input.dataset.maxRows || '6');
@@ -202,6 +233,35 @@ input.addEventListener('keydown', function(e) {
         }
     }
 });
+
+function loadSample(btn) {
+    input.value = btn.dataset.message || '';
+    autoResize();
+    const epSelect = document.getElementById('endpoint-select');
+    if (epSelect && btn.dataset.endpoint) {
+        const opt = Array.from(epSelect.options).find(o => o.value === btn.dataset.endpoint);
+        if (opt) epSelect.value = btn.dataset.endpoint;
+    }
+    input.focus();
+}
+
+function copyText(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    });
+}
 
 function applyParams() {
     const inputs = document.querySelectorAll('[data-param]');
@@ -281,14 +341,36 @@ function addMessage(text, isUser, displayItems) {
         contentHtml = displayItems.map(item => renderRichValue(item)).join('');
     }
 
+    // Action buttons
+    let actionsHtml = '<div class="msg-actions">';
+    if (isUser) {
+        actionsHtml += `<button class="msg-action-btn" onclick="editMessage(this)" title="Load into input">Edit &amp; Resubmit</button>`;
+    }
+    actionsHtml += `<button class="msg-action-btn" onclick="copyText(this.closest('.msg-user,.msg-bot').dataset.rawText, this)">Copy</button>`;
+    actionsHtml += '</div>';
+
+    div.dataset.rawText = text;
     div.innerHTML = `
         <div class="flex items-start gap-3">
             <div class="w-7 h-7 rounded-full ${iconBg} flex items-center justify-center flex-shrink-0 mt-0.5">${icon}</div>
-            <div class="msg-content text-sm ${isUser ? '' : 'text-slate-700'} w-full">${contentHtml}</div>
+            <div class="w-full">
+                <div class="msg-body-scroll msg-content text-sm ${isUser ? '' : 'text-slate-700'}">${contentHtml}</div>
+                ${actionsHtml}
+            </div>
         </div>`;
     container.appendChild(div);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
     return div;
+}
+
+function editMessage(btn) {
+    const msgDiv = btn.closest('.msg-user,.msg-bot');
+    const text = msgDiv ? msgDiv.dataset.rawText : '';
+    if (!text) return;
+    input.value = text;
+    autoResize();
+    input.focus();
+    input.scrollTop = input.scrollHeight;
 }
 
 function showTyping() {

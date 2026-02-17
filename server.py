@@ -79,6 +79,11 @@ class InputConfig(BaseModel):
     label: str = ""                         # optional label above input
     submit_on_enter: bool = True            # Enter submits (false = Shift+Enter submits)
 
+class SampleRequest(BaseModel):
+    label: str                              # display label in the selector
+    message: str                            # pre-filled message text
+    endpoint: str = ""                     # optional: pre-select this endpoint
+
 class ChatConfig(BaseModel):
     system_prompt: str = "You are a helpful AI assistant."
     placeholder: str = "Type your message..."
@@ -86,6 +91,7 @@ class ChatConfig(BaseModel):
     input: InputConfig = InputConfig()      # input control configuration
     endpoints: list[ChatEndpoint] = []
     show_endpoint_selector: bool = False    # let user pick endpoint in UI
+    samples: List[SampleRequest] = []       # optional sample requests shown in UI
 
 class ParamConfig(BaseModel):
     name: str                               # e.g. "project"
@@ -184,6 +190,7 @@ FD_BASE_URL = os.getenv("FD_BASE_URL", "http://127.0.0.1:8080")
 CT_BASE_URL = os.getenv("CT_BASE_URL", "http://127.0.0.1:8000")
 CT_MANIFESTS_DIR = os.getenv("CT_MANIFESTS_DIR", "")
 TRACE_ENABLED = os.getenv("UI_GEN_TRACE", os.getenv("TRACE", "false")).strip().lower() in {"1", "true", "yes", "on"}
+TRACE_HIDE_TOKEN = os.getenv("UI_GEN_TRACE_HIDE_TOKEN", "false").strip().lower() in {"1", "true", "yes", "on"}
 SSL_VERIFY = os.getenv("UI_GEN_SSL_VERIFY", os.getenv("SSL_VERIFY", "true")).strip().lower() in {"1", "true", "yes", "on"}
 BACKEND_TOKENS: Dict[str, Dict[str, Any]] = {}
 
@@ -197,11 +204,29 @@ def build_curl_command(method: str, url: str, headers: Dict[str, str], body: Any
     """Build a curl command that can be re-used for debugging."""
     cmd_parts = [f"curl -X {method.upper()} '{_curl_escape_single_quotes(url)}'"]
     for k, v in headers.items():
-        cmd_parts.append(f"  -H '{_curl_escape_single_quotes(str(k))}: {_curl_escape_single_quotes(str(v))}'")
+        display_v = "<token hidden>" if TRACE_HIDE_TOKEN and k.lower() == "authorization" else v
+        cmd_parts.append(f"  -H '{_curl_escape_single_quotes(str(k))}: {_curl_escape_single_quotes(str(display_v))}'")
     if body is not None:
         body_json = json.dumps(body, ensure_ascii=False)
         cmd_parts.append(f"  --data-raw '{_curl_escape_single_quotes(body_json)}'")
     return " \\\n".join(cmd_parts)
+
+
+def _mask_token_in_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of a trace dict with Authorization header and token field masked."""
+    if not TRACE_HIDE_TOKEN:
+        return trace
+    import copy
+    t = copy.deepcopy(trace)
+    hdrs = t.get("headers", {})
+    for k in list(hdrs.keys()):
+        if k.lower() == "authorization":
+            hdrs[k] = "<token hidden>"
+    if "token" in t:
+        t["token"] = "<token hidden>"
+    if "curl" in t:
+        t["curl"] = build_curl_command(t.get("method", "POST"), t.get("url", ""), hdrs, t.get("body"))
+    return t
 
 
 def store_backend_token(token: str, max_age_seconds: int) -> str:
@@ -708,6 +733,7 @@ async def chat_page(request: Request, slug: str):
     for e in cfg.chat.endpoints:
         if e.response_display:
             ep_display[e.name] = [item.model_dump() for item in e.response_display]
+    samples_json = json.dumps([s.model_dump() for s in cfg.chat.samples])
     return templates.TemplateResponse("chat.html", {
         "request": request, "cfg": cfg, "slug": slug,
         "username": session.get("sub", "User"),
@@ -716,6 +742,7 @@ async def chat_page(request: Request, slug: str):
         "params": params,
         "param_configs": cfg.params,
         "ep_display_json": json.dumps(ep_display),
+        "samples_json": samples_json,
     })
 
 @app.post("/{slug}/chat/send")
@@ -778,7 +805,7 @@ async def chat_send(request: Request, slug: str):
     if TRACE_ENABLED:
         logger.info(
             "trace.chat.request.pre_submit=%s",
-            json.dumps(trace_request, ensure_ascii=False),
+            json.dumps(_mask_token_in_trace(trace_request), ensure_ascii=False),
         )
 
     try:
@@ -792,7 +819,7 @@ async def chat_send(request: Request, slug: str):
         if TRACE_ENABLED:
             logger.info(
                 "trace.chat.request=%s trace.chat.response=%s",
-                json.dumps(trace_request, ensure_ascii=False),
+                json.dumps(_mask_token_in_trace(trace_request), ensure_ascii=False),
                 json.dumps(trace_response, ensure_ascii=False),
             )
         if resp.status_code == 200:
@@ -823,7 +850,7 @@ async def chat_send(request: Request, slug: str):
                 result = {"response": str(extract_field(data, ep.response_field)), "display": display_items}
                 if TRACE_ENABLED:
                     result["trace"] = {
-                        "request": trace_request,
+                        "request": _mask_token_in_trace(trace_request),
                         "response": trace_response,
                     }
                 return JSONResponse(result)
@@ -832,7 +859,7 @@ async def chat_send(request: Request, slug: str):
             result = {"response": str(answer)}
             if TRACE_ENABLED:
                 result["trace"] = {
-                    "request": trace_request,
+                    "request": _mask_token_in_trace(trace_request),
                     "response": trace_response,
                 }
             return JSONResponse(result)
@@ -840,7 +867,7 @@ async def chat_send(request: Request, slug: str):
             result = {"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"}
             if TRACE_ENABLED:
                 result["trace"] = {
-                    "request": trace_request,
+                    "request": _mask_token_in_trace(trace_request),
                     "response": trace_response,
                 }
             return JSONResponse(result)
@@ -848,7 +875,7 @@ async def chat_send(request: Request, slug: str):
         result = {"response": f"Could not reach backend: {e}"}
         if TRACE_ENABLED:
             result["trace"] = {
-                "request": trace_request,
+                "request": _mask_token_in_trace(trace_request),
                 "response": {
                     "error": str(e),
                 },

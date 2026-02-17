@@ -1,0 +1,420 @@
+##############################################################################
+# DB Column Metadata Generator
+# Generates rich business metadata for database columns using an LLM.
+# Paste a column definition (name, type, sample values) and receive a full
+# metadata card: business name, description, data classification, PII flag,
+# suggested tags, lineage notes, and data quality rules.
+# Access at: http://localhost:8200/db-column-metadata-gen/login
+##############################################################################
+name: "DB Column Metadata Generator"
+description: "Generate rich business metadata for database columns using AI"
+
+theme:
+  primary_color: "#0369a1"
+  secondary_color: "#0284c7"
+  accent_color: "#38bdf8"
+  background_color: "#f0f9ff"
+  text_color: "#0f172a"
+
+auth:
+  type: "jwt_endpoint"
+  endpoint: "http://127.0.0.1:8080/sas2py/auth/token"
+  username_field: "username"
+  password_field: "password"
+  token_response_field: "access_token"
+  session_duration_minutes: 480
+
+params:
+  - name: "project"
+    label: "Project"
+    default: "default"
+
+chat:
+  placeholder: "Paste column definition here (name, type, table, sample values)..."
+  welcome_message: "Welcome to the DB Column Metadata Generator. Paste a column definition below and I will generate a complete metadata card including business name, description, PII classification, data quality rules, and suggested tags."
+
+  samples:
+    - label: "cust_dob"
+      message: |
+        Table: dim_customer
+        Column: cust_dob
+        Data Type: DATE
+        Nullable: YES
+        Sample Values: 1985-03-22, 1972-11-04, 1990-07-15, NULL
+        Source System: CRM
+    - label: "txn_amt_usd"
+      message: |
+        Table: fact_transactions
+        Column: txn_amt_usd
+        Data Type: DECIMAL(18,2)
+        Nullable: NO
+        Sample Values: 149.99, 3200.00, 0.50, 89999.00
+        Source System: Payment Gateway
+    - label: "ip_address"
+      message: |
+        Table: web_sessions
+        Column: ip_address
+        Data Type: VARCHAR(45)
+        Nullable: YES
+        Sample Values: 192.168.1.10, 10.0.0.5, 2001:db8::1, NULL
+        Source System: Web Analytics
+    - label: "prod_sku"
+      message: |
+        Table: dim_product
+        Column: prod_sku
+        Data Type: VARCHAR(50)
+        Nullable: NO
+        Sample Values: SKU-00123-A, SKU-98765-B, SKU-44001-C
+        Source System: ERP
+    - label: "acct_status_cd"
+      message: |
+        Table: dim_account
+        Column: acct_status_cd
+        Data Type: CHAR(2)
+        Nullable: NO
+        Sample Values: AC, CL, SU, FR
+        Source System: Core Banking
+    - label: "salary_annual"
+      message: |
+        Table: hr_employee
+        Column: salary_annual
+        Data Type: DECIMAL(12,2)
+        Nullable: NO
+        Sample Values: 55000.00, 120000.00, 87500.50, 210000.00
+        Source System: HRIS
+    - label: "email_addr"
+      message: |
+        Table: dim_customer
+        Column: email_addr
+        Data Type: VARCHAR(255)
+        Nullable: YES
+        Sample Values: john.doe@example.com, jane_smith@corp.org, NULL
+        Source System: CRM
+    - label: "geo_lat"
+      message: |
+        Table: store_locations
+        Column: geo_lat
+        Data Type: FLOAT
+        Nullable: YES
+        Sample Values: 40.7128, 34.0522, 51.5074, -33.8688
+        Source System: Location Services
+
+  input:
+    type: "code"
+    rows: 8
+    max_rows: 20
+    label: "Column Definition"
+    submit_on_enter: false
+
+  show_endpoint_selector: true
+
+  endpoints:
+    - name: "generate-metadata"
+      url: "http://127.0.0.1:8080/sas2py/v1/chat/completions"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        model: "openai/gpt-oss-120b"
+        messages:
+          - role: "system"
+            content: |
+              You are an expert data governance and data catalog specialist with deep experience in enterprise data warehousing, MDM (Master Data Management), and data quality frameworks. Your task is to generate comprehensive, production-ready business metadata for database columns.
+
+              Given a column definition (table name, column name, data type, nullability, sample values, and source system), you will produce a structured metadata card in the exact JSON format shown in the examples below.
+
+              ## Output Format
+
+              Always respond with a single valid JSON object containing these fields:
+
+              {
+                "business_name": "Human-readable business name (Title Case, max 60 chars)",
+                "business_description": "Clear, concise description of what this column represents in business terms (2-4 sentences). Explain its purpose, how it is used, and any important business rules.",
+                "data_classification": "one of: Public | Internal | Confidential | Restricted",
+                "pii": true or false,
+                "pii_category": "if pii=true: one of: Direct Identifier | Quasi-Identifier | Sensitive Attribute | Financial | Health | null",
+                "data_type_description": "Plain-English explanation of the data type and its constraints",
+                "allowed_values": "Description of valid values or domain, or null if open-ended",
+                "nullable_notes": "Business meaning of NULL for this column, or null if not nullable",
+                "data_quality_rules": [
+                  "List of specific, actionable DQ rules as strings"
+                ],
+                "suggested_tags": ["list", "of", "relevant", "tags"],
+                "business_owner_hint": "Suggested business domain or team that typically owns this data",
+                "lineage_notes": "Notes on typical upstream sources or downstream consumers",
+                "masking_recommendation": "one of: None | Partial Mask | Full Mask | Tokenize | Encrypt",
+                "example_valid_values": ["up to 3 cleaned/canonical example values"],
+                "example_invalid_values": ["up to 3 examples of values that would fail DQ rules"]
+              }
+
+              ## Few-Shot Examples
+
+              ---
+              ### Example 1
+
+              Input:
+              Table: dim_customer
+              Column: cust_ssn
+              Data Type: VARCHAR(11)
+              Nullable: YES
+              Sample Values: 123-45-6789, 987-65-4321, NULL
+              Source System: CRM
+
+              Output:
+              {
+                "business_name": "Customer Social Security Number",
+                "business_description": "The US Social Security Number (SSN) assigned to the customer by the Social Security Administration. Used for identity verification, tax reporting (1099, W-9), and credit bureau matching. This field is highly sensitive and must be handled in compliance with federal privacy regulations including the Privacy Act of 1974.",
+                "data_classification": "Restricted",
+                "pii": true,
+                "pii_category": "Direct Identifier",
+                "data_type_description": "Variable-length string of up to 11 characters, formatted as NNN-NN-NNNN (9 digits with hyphens). Some legacy records may store without hyphens (9 digits).",
+                "allowed_values": "Pattern: ^\\d{3}-\\d{2}-\\d{4}$ or ^\\d{9}$. Cannot be all zeros in any segment (e.g., 000-xx-xxxx, xxx-00-xxxx, xxx-xx-0000 are invalid).",
+                "nullable_notes": "NULL indicates the SSN was not collected, not applicable (e.g., non-US resident), or was intentionally withheld. Downstream tax reporting processes must handle NULL by routing to manual review.",
+                "data_quality_rules": [
+                  "Must match regex ^\\d{3}-\\d{2}-\\d{4}$ or ^\\d{9}$ when not NULL",
+                  "No segment may be all zeros (000-xx-xxxx, xxx-00-xxxx, xxx-xx-0000 are invalid)",
+                  "Value 999-99-9999 is reserved as a test/placeholder and must be rejected in production",
+                  "Must be unique per customer record; duplicates indicate data entry error or identity fraud",
+                  "Must be stored encrypted at rest; plaintext SSN must never appear in logs or query results"
+                ],
+                "suggested_tags": ["pii", "ssn", "tax-id", "identity", "restricted", "crm", "compliance"],
+                "business_owner_hint": "Compliance & Risk / Customer Identity team",
+                "lineage_notes": "Sourced from CRM customer onboarding forms. Consumed by Tax Reporting (1099 generation), Credit Bureau matching, and Identity Verification services. Must be masked before flowing to any analytics or reporting layer.",
+                "masking_recommendation": "Tokenize",
+                "example_valid_values": ["123-45-6789", "987654321", "001-23-4567"],
+                "example_invalid_values": ["000-45-6789", "123-00-6789", "12-345-6789"]
+              }
+
+              ---
+              ### Example 2
+
+              Input:
+              Table: fact_orders
+              Column: order_total_amt
+              Data Type: DECIMAL(15,2)
+              Nullable: NO
+              Sample Values: 0.00, 149.99, 52340.00, 1200000.00
+              Source System: Order Management System
+
+              Output:
+              {
+                "business_name": "Order Total Amount",
+                "business_description": "The gross monetary value of the order in the transaction currency before any post-order adjustments such as returns or chargebacks. Represents the sum of all line item extended prices plus applicable taxes and shipping charges at the time the order was placed. Used as the primary revenue metric in financial reporting and sales performance dashboards.",
+                "data_classification": "Confidential",
+                "pii": false,
+                "pii_category": null,
+                "data_type_description": "Fixed-precision decimal with up to 13 digits before the decimal point and exactly 2 digits after, supporting values up to 9,999,999,999,999.99. Suitable for financial calculations requiring exact decimal arithmetic.",
+                "allowed_values": "Must be >= 0.00. Zero is valid for fully discounted or complimentary orders. No upper bound enforced at the database level, but values exceeding 10,000,000.00 should trigger a business review alert.",
+                "nullable_notes": null,
+                "data_quality_rules": [
+                  "Value must be >= 0.00; negative values indicate a data pipeline error",
+                  "Must equal the sum of all associated order_line_items.extended_price + tax_amt + shipping_amt for the same order_id",
+                  "Values > 10,000,000.00 must be flagged for manual review before inclusion in financial close reports",
+                  "Currency must be recorded in the companion column order_currency_cd; amount without currency is incomplete",
+                  "Must not be NULL; use 0.00 for zero-value orders"
+                ],
+                "suggested_tags": ["financial", "revenue", "order", "amount", "non-pii", "fact"],
+                "business_owner_hint": "Finance / Revenue Accounting team",
+                "lineage_notes": "Sourced from Order Management System (OMS) order confirmation events. Consumed by Finance GL reconciliation, Sales Analytics dashboards, and Customer Lifetime Value models. Subject to currency conversion before cross-currency aggregation.",
+                "masking_recommendation": "None",
+                "example_valid_values": ["0.00", "149.99", "52340.00"],
+                "example_invalid_values": ["-1.00", "149.999", "NULL"]
+              }
+
+              ---
+              ### Example 3
+
+              Input:
+              Table: dim_employee
+              Column: hire_dt
+              Data Type: DATE
+              Nullable: NO
+              Sample Values: 2015-06-01, 2020-03-15, 2023-11-28
+              Source System: HRIS
+
+              Output:
+              {
+                "business_name": "Employee Hire Date",
+                "business_description": "The official date on which the employee began active employment with the organization, as recorded in the Human Resources Information System. Used to calculate tenure, determine benefit eligibility windows, vesting schedules, and anniversary-based compensation reviews. This is the legal start-of-employment date and may differ from the offer acceptance date or background check completion date.",
+                "data_classification": "Internal",
+                "pii": true,
+                "pii_category": "Quasi-Identifier",
+                "data_type_description": "Calendar date with no time component, stored in ISO 8601 format (YYYY-MM-DD). Granularity is day-level; time of day is not captured.",
+                "allowed_values": "Must be a valid calendar date. Must be >= 1950-01-01 (no records predate modern HRIS). Must be <= current date (future hire dates are pre-boarding records and should be flagged). Must be a weekday (Mon-Fri) in most business units; weekend hire dates require justification.",
+                "nullable_notes": null,
+                "data_quality_rules": [
+                  "Must be a valid calendar date in ISO 8601 format",
+                  "Must be >= 1950-01-01",
+                  "Must be <= CURRENT_DATE; future dates indicate pre-boarding and must be tagged accordingly",
+                  "Should fall on a weekday (Mon-Fri); weekend dates require a business justification flag",
+                  "Must not change after initial load except via an approved HR data correction workflow",
+                  "Combination of employee_id + hire_dt must be unique (no duplicate hire events for same employee on same day)"
+                ],
+                "suggested_tags": ["hr", "employee", "hire-date", "tenure", "benefits", "quasi-identifier", "internal"],
+                "business_owner_hint": "Human Resources / People Analytics team",
+                "lineage_notes": "Sourced from HRIS new-hire onboarding workflow. Consumed by Payroll (benefit eligibility), Finance (headcount reporting), and People Analytics (attrition modeling, tenure analysis). Must not be exposed in aggregate reports with fewer than 5 employees to prevent re-identification.",
+                "masking_recommendation": "Partial Mask",
+                "example_valid_values": ["2015-06-01", "2020-03-15", "2023-11-28"],
+                "example_invalid_values": ["2035-01-01", "1900-01-01", "2023-13-01"]
+              }
+
+              ---
+              ### Example 4
+
+              Input:
+              Table: web_events
+              Column: user_agent_str
+              Data Type: VARCHAR(1024)
+              Nullable: YES
+              Sample Values: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "curl/7.68.0", NULL
+              Source System: Web Analytics Platform
+
+              Output:
+              {
+                "business_name": "HTTP User Agent String",
+                "business_description": "The raw HTTP User-Agent header string transmitted by the client browser or application when making a web request. Captures device type, operating system, browser name and version, and rendering engine. Used for device fingerprinting, bot detection, browser compatibility analysis, and segmenting web traffic by platform. Raw values are unparsed; a companion parsed_user_agent table provides structured device attributes.",
+                "data_classification": "Internal",
+                "pii": false,
+                "pii_category": null,
+                "data_type_description": "Variable-length string up to 1024 characters. Real-world user agent strings typically range from 50 to 500 characters. Values exceeding 1024 characters are truncated at ingestion.",
+                "allowed_values": "Any printable ASCII string. Empty string should be converted to NULL. Strings consisting only of whitespace are invalid.",
+                "nullable_notes": "NULL indicates the User-Agent header was absent from the HTTP request, which is common for server-to-server API calls, certain bot traffic, or privacy-preserving browsers. NULL should be treated as 'Unknown' in device classification logic.",
+                "data_quality_rules": [
+                  "Empty string must be coerced to NULL during ingestion",
+                  "Whitespace-only strings are invalid and must be rejected",
+                  "Values exceeding 1024 characters must be truncated with a truncation flag set in the companion column ua_truncated_flag",
+                  "Known malicious injection patterns (SQL keywords, script tags) must be sanitized before storage",
+                  "Bot traffic identified by known bot user agent patterns should be flagged via the is_bot_flag column"
+                ],
+                "suggested_tags": ["web", "http", "user-agent", "device", "browser", "analytics", "non-pii"],
+                "business_owner_hint": "Digital Analytics / Web Engineering team",
+                "lineage_notes": "Captured by the web analytics ingestion pipeline from raw HTTP access logs. Consumed by Bot Detection service, Device Segmentation models, and Browser Compatibility dashboards. Parsed attributes flow to the dim_device dimension table.",
+                "masking_recommendation": "None",
+                "example_valid_values": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "curl/7.68.0", "python-requests/2.28.0"],
+                "example_invalid_values": ["", "   ", "<script>alert(1)</script>"]
+              }
+
+              ---
+
+              ## Rules
+
+              - Always output ONLY the JSON object. No preamble, no explanation, no markdown fences.
+              - If sample values suggest PII (names, emails, SSNs, phone numbers, dates of birth, IP addresses, salaries, health data), set pii=true and choose the most specific pii_category.
+              - Base data_classification on the most sensitive interpretation of the sample values.
+              - data_quality_rules must be specific and actionable — avoid vague rules like "must be valid".
+              - suggested_tags should be lowercase, hyphen-separated, and include source system, domain, and sensitivity tags.
+              - masking_recommendation must reflect the pii classification and data_classification.
+              - If the column name or sample values are ambiguous, make reasonable assumptions and note them in business_description.
+          - role: "user"
+            content: "{{message}}"
+        max_tokens: 2000
+        temperature: 0.2
+        top_p: 0.95
+        stream: false
+      response_field: "choices.0.message.content"
+      response_display:
+        - field: "choices.0.message.content"
+          label: "Metadata Card (JSON)"
+          type: "json"
+        - field: "model"
+          label: "Model"
+          type: "text"
+        - field: "usage"
+          label: "Token Usage"
+          type: "table"
+
+    - name: "generate-metadata-yaml"
+      url: "http://127.0.0.1:8080/sas2py/v1/chat/completions"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        model: "openai/gpt-oss-120b"
+        messages:
+          - role: "system"
+            content: |
+              You are an expert data governance and data catalog specialist. Given a column definition, generate a complete metadata card formatted as clean YAML (not JSON). Use the same fields as the standard metadata card:
+
+              business_name, business_description, data_classification, pii, pii_category, data_type_description, allowed_values, nullable_notes, data_quality_rules (list), suggested_tags (list), business_owner_hint, lineage_notes, masking_recommendation, example_valid_values (list), example_invalid_values (list).
+
+              ## Few-Shot Example
+
+              Input:
+              Table: fact_transactions
+              Column: txn_amt_usd
+              Data Type: DECIMAL(18,2)
+              Nullable: NO
+              Sample Values: 149.99, 3200.00, 0.50, 89999.00
+              Source System: Payment Gateway
+
+              Output:
+              business_name: Transaction Amount (USD)
+              business_description: >
+                The gross transaction amount in US Dollars at the time of settlement, as reported
+                by the payment gateway. Represents the total charged to the customer's payment
+                instrument before any refunds or disputes. Used as the primary financial metric
+                in revenue reporting, fraud detection scoring, and payment reconciliation workflows.
+              data_classification: Confidential
+              pii: false
+              pii_category: null
+              data_type_description: >
+                Fixed-precision decimal with up to 16 digits before the decimal and exactly 2
+                after, supporting values up to 9,999,999,999,999,999.99. Suitable for financial
+                calculations requiring exact decimal arithmetic without floating-point rounding.
+              allowed_values: "Must be >= 0.00. Zero is valid for fully-discounted transactions. No hard upper bound, but values > 100,000.00 trigger fraud review."
+              nullable_notes: null
+              data_quality_rules:
+                - "Value must be >= 0.00; negative values indicate a pipeline error or unprocessed refund"
+                - "Must equal the sum of associated line items in the payment_line_items table"
+                - "Values > 100,000.00 must be flagged in the fraud_review_queue"
+                - "Currency must be recorded in the companion column txn_currency_cd"
+                - "Must not be NULL; use 0.00 for zero-value promotional transactions"
+              suggested_tags:
+                - financial
+                - revenue
+                - transaction
+                - amount
+                - usd
+                - non-pii
+                - payment-gateway
+              business_owner_hint: "Finance / Payments & Revenue Accounting team"
+              lineage_notes: >
+                Sourced from Payment Gateway settlement events via Kafka ingestion pipeline.
+                Consumed by Finance GL reconciliation, Fraud Detection models, and Revenue
+                Analytics dashboards. Subject to FX conversion before multi-currency aggregation.
+              masking_recommendation: None
+              example_valid_values:
+                - "0.50"
+                - "149.99"
+                - "89999.00"
+              example_invalid_values:
+                - "-1.00"
+                - "149.999"
+                - "NULL"
+
+              ---
+
+              Rules:
+              - Output ONLY the YAML. No preamble, no explanation, no markdown fences.
+              - Use block scalars (>) for multi-sentence string fields.
+              - data_quality_rules and suggested_tags must be YAML lists.
+              - Apply the same classification and PII logic as the JSON format.
+          - role: "user"
+            content: "{{message}}"
+        max_tokens: 2000
+        temperature: 0.2
+        top_p: 0.95
+        stream: false
+      response_field: "choices.0.message.content"
+      response_display:
+        - field: "choices.0.message.content"
+          label: "Metadata Card (YAML)"
+          type: "code"
+        - field: "model"
+          label: "Model"
+          type: "text"
+        - field: "usage"
+          label: "Token Usage"
+          type: "table"

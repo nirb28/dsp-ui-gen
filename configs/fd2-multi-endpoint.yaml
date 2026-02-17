@@ -30,6 +30,16 @@ chat:
   system_prompt: "You are a research assistant with access to multiple knowledge sources."
   placeholder: "Paste your SAS code here, or type a question..."
   welcome_message: "Welcome! I'm your research assistant. Select an endpoint above and ask away."
+  samples:
+    - label: "Simple SAS proc means"
+      message: "proc means data=sashelp.class; var age height weight; run;"
+      endpoint: "sas2py-convert"
+    - label: "SAS data step"
+      message: "data work.out; set sashelp.class; bmi = weight / (height**2); run;"
+      endpoint: "sas2py-convert"
+    - label: "Ask a question"
+      message: "What are the key differences between PROC SQL and a DATA step merge in SAS?"
+      endpoint: "smart-query"
   input:
     type: "code"
     rows: 6

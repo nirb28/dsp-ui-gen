@@ -97,6 +97,7 @@ All types create a local session cookie. For `jwt_endpoint`/`ldap`, the backend 
     - `request.method`, `request.url`, `request.headers`, `request.body`, `request.token`
     - `request.curl` (copy/paste-ready curl command)
     - `response.status_code`, `response.headers`, `response.body`
+- `UI_GEN_TRACE_HIDE_TOKEN` — Mask the `Authorization` header and `token` field in trace logs/responses (`true`/`false`, default: `false`). Useful when sharing traces without exposing credentials.
 - `UI_GEN_SSL_VERIFY` — Enable TLS certificate verification for outbound HTTP calls (`true`/`false`, default: `true`).
 
 ## Integration with DSP Stack
