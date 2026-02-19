@@ -9,7 +9,7 @@ description: "Multi-mode AI assistant with query expansion and retrieval"
 params:
   - name: "project"
     label: "Project"
-    default: "sas2py"
+    default: ~
 
 theme:
   primary_color: "#7c3aed"

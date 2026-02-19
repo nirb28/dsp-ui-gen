@@ -68,7 +68,7 @@
                 </button>
                 {% endif %}
                 <span class="text-xs text-slate-500">{{ username }}</span>
-                <a href="/{{ slug }}/logout"
+                <a href="{{ logout_url }}"
                    class="text-xs text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
@@ -79,15 +79,30 @@
         </div>
     </header>
 
+    <!-- Missing required params error banner -->
+    {% if missing_params_error %}
+    <div id="missing-params-banner" class="flex-shrink-0 border-b border-red-200 bg-red-50">
+        <div class="max-w-5xl mx-auto px-4 py-2 flex items-center gap-2 text-red-700 text-xs">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span>{{ missing_params_error }}. Use the <strong>&#9881; Params</strong> panel to set them before sending messages.</span>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Params panel -->
     {% if param_configs %}
-    <div id="params-panel" class="hidden flex-shrink-0 border-b border-slate-200 bg-slate-50 params-bar">
+    <div id="params-panel" class="{% if not missing_params_error %}hidden {% endif %}flex-shrink-0 border-b border-slate-200 bg-slate-50 params-bar">
         <div class="max-w-5xl mx-auto px-4 py-2 flex flex-wrap items-center gap-3">
             {% for p in param_configs %}
             <div class="flex items-center gap-1.5">
-                <label class="text-xs font-medium text-slate-500">{{ p.label or p.name }}:</label>
-                <input type="text" data-param="{{ p.name }}" value="{{ params.get(p.name, p.default) }}"
-                       class="px-2 py-1 rounded border border-slate-300 w-32 focus:outline-none focus:border-amber-500">
+                <label class="text-xs font-medium {% if p.default is none and not params.get(p.name) %}text-red-500{% else %}text-slate-500{% endif %}">
+                    {{ p.label or p.name }}{% if p.default is none %}<span title="Required"> *</span>{% endif %}:
+                </label>
+                <input type="text" data-param="{{ p.name }}" value="{{ params.get(p.name, '') }}"
+                       class="px-2 py-1 rounded border w-32 focus:outline-none focus:border-amber-500
+                              {% if p.default is none and not params.get(p.name) %}border-red-400 bg-red-50{% else %}border-slate-300{% endif %}">
             </div>
             {% endfor %}
             <button onclick="applyParams()"
@@ -185,7 +200,8 @@
 </div>
 
 <script>
-const SLUG = '{{ slug }}';
+const CHAT_BASE = '{{ chat_url | safe }}'.split('?')[0];
+const CHAT_SEND_BASE = '{{ chat_send_url | safe }}'.split('?')[0];
 const form = document.getElementById('chat-form');
 const input = document.getElementById('chat-input');
 const container = document.getElementById('msg-container');
@@ -265,9 +281,9 @@ function copyText(text, btn) {
 
 function applyParams() {
     const inputs = document.querySelectorAll('[data-param]');
-    const qs = new URLSearchParams();
+    const qs = new URLSearchParams(window.location.search);
     inputs.forEach(inp => qs.set(inp.dataset.param, inp.value));
-    window.location.href = `/${SLUG}/chat?${qs.toString()}`;
+    window.location.href = `${CHAT_BASE}?${qs.toString()}`;
 }
 
 function escapeHtml(text) {
@@ -412,7 +428,7 @@ form.addEventListener('submit', async (e) => {
     const endpoint = epSelect ? epSelect.value : 'default';
 
     try {
-        const resp = await fetch(`/${SLUG}/chat/send`, {
+        const resp = await fetch(CHAT_SEND_BASE + window.location.search, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg, endpoint: endpoint }),

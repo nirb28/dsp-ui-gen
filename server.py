@@ -96,7 +96,7 @@ class ChatConfig(BaseModel):
 class ParamConfig(BaseModel):
     name: str                               # e.g. "project"
     label: str = ""                         # display label in UI
-    default: str = ""                       # default value
+    default: Optional[str] = None           # default value; None means required (no default)
 
 class AppConfig(BaseModel):
     name: str = "AI Assistant"
@@ -579,38 +579,309 @@ async def admin_reload(request: Request):
 # ---------------------------------------------------------------------------
 def resolve_params(cfg: AppConfig, request: Request) -> Dict[str, str]:
     """Build param values from config defaults, cookie, then query string overrides."""
-    params = {p.name: p.default for p in cfg.params}
-    # Cookie-stored params (set after login)
+    params = {p.name: (p.default if p.default is not None else "") for p in cfg.params}
+    # Cookie-stored params: only fill in params that are still empty (no default set)
     cookie_params = request.cookies.get("ui_params")
     if cookie_params:
         try:
-            params.update(json.loads(cookie_params))
+            for k, v in json.loads(cookie_params).items():
+                if k in params and not params[k] and v:
+                    params[k] = v
         except Exception:
             pass
-    # Query string overrides
+    # Query string overrides always win
     for p in cfg.params:
         qval = request.query_params.get(p.name)
         if qval:
             params[p.name] = qval
     return params
 
+
+def get_missing_required_params(cfg: AppConfig, params: Dict[str, str]) -> List[str]:
+    """Return names of params that have no default and no resolved value."""
+    missing = []
+    for p in cfg.params:
+        if p.default is None and not params.get(p.name):
+            missing.append(p.label or p.name)
+    return missing
+
+
+def load_config_from_path(config_path: str) -> AppConfig:
+    """Load an AppConfig from an arbitrary YAML file path."""
+    path = Path(config_path)
+    if not path.exists():
+        raise HTTPException(404, f"Config file not found: {config_path}")
+    if path.suffix.lower() not in (".yaml", ".yml"):
+        raise HTTPException(400, "Config file must be a .yaml or .yml file")
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return AppConfig(**raw)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to load config from '{config_path}': {e}")
+
+
+def get_config_for_request(slug: str, request: Request) -> AppConfig:
+    """Resolve AppConfig by slug only (slug routes never use config_path)."""
+    return get_config(slug)
+
+
+def require_config_path(request: Request) -> AppConfig:
+    """Load AppConfig from the required config_path query parameter."""
+    config_path = request.query_params.get("config_path")
+    if not config_path:
+        raise HTTPException(400, "config_path query parameter is required for this route")
+    return load_config_from_path(config_path)
+
+# ---------------------------------------------------------------------------
+# Routes – /ui/* (config_path-based, no slug)
+# ---------------------------------------------------------------------------
+UI_SLUG = "_ui"  # virtual slug used for /ui/* routes in templates
+
+@app.get("/ui/login", response_class=HTMLResponse)
+async def ui_login_page(request: Request):
+    """Login page loaded from config_path query parameter (no slug needed)."""
+    cfg = require_config_path(request)
+    session = get_session(request)
+    params = resolve_params(cfg, request)
+    cp = request.query_params.get("config_path")
+    if session:
+        redirect_qs = dict(params)
+        redirect_qs["config_path"] = cp
+        return RedirectResponse(f"/ui/chat?{urlencode(redirect_qs)}", status_code=302)
+    missing = get_missing_required_params(cfg, params)
+    param_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
+    return templates.TemplateResponse("login.html", {
+        "request": request, "cfg": cfg, "slug": UI_SLUG,
+        "login_action": f"/ui/login?{request.url.query}",
+        "error": param_error,
+        "params": params,
+    })
+
+@app.post("/ui/login")
+async def ui_login_submit(request: Request,
+                           username: str = Form(...), password: str = Form(...)):
+    """Login form submission for config_path-based UI."""
+    cfg = require_config_path(request)
+    auth = cfg.auth
+    backend_token = None
+    error = None
+    cp = request.query_params.get("config_path", "")
+
+    if auth.type == "simple":
+        if not username or not password:
+            error = "Username and password are required."
+        else:
+            backend_token = None
+
+    elif auth.type in ("ldap", "jwt_endpoint"):
+        if not auth.endpoint:
+            error = "Auth endpoint not configured."
+        else:
+            try:
+                params = resolve_params(cfg, request)
+                auth_url = auth.endpoint
+                for k, v in params.items():
+                    auth_url = auth_url.replace("{{param." + k + "}}", v)
+                    auth_url = auth_url.replace("{{" + k + "}}", v)
+                payload = {
+                    auth.username_field: username,
+                    auth.password_field: password,
+                    **auth.extra_fields,
+                }
+                async with httpx.AsyncClient(timeout=15, verify=SSL_VERIFY) as client:
+                    resp = await client.post(auth_url, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    backend_token = data.get(auth.token_response_field)
+                    if not backend_token:
+                        error = "Auth succeeded but no token returned."
+                else:
+                    error = f"Authentication failed (HTTP {resp.status_code})."
+            except httpx.RequestError as e:
+                error = f"Auth service unreachable: {e}"
+    else:
+        error = f"Unknown auth type: {auth.type}"
+
+    if error:
+        return templates.TemplateResponse("login.html", {
+            "request": request, "cfg": cfg, "slug": UI_SLUG,
+            "login_action": f"/ui/login?{request.url.query}",
+            "error": error,
+            "params": resolve_params(cfg, request),
+        })
+
+    session_token = create_local_token(username, auth.session_duration_minutes)
+    params = resolve_params(cfg, request)
+    redirect_qs_params = dict(params)
+    redirect_qs_params["config_path"] = cp
+    redirect_url = f"/ui/chat?{urlencode(redirect_qs_params)}"
+    response = RedirectResponse(redirect_url, status_code=302)
+    response.set_cookie("session_token", session_token, httponly=True, samesite="lax",
+                         max_age=auth.session_duration_minutes * 60)
+    if backend_token:
+        existing_ref = request.cookies.get("backend_token_ref", "")
+        delete_backend_token_ref(existing_ref)
+        token_max_age = auth.session_duration_minutes * 60
+        token_ref = store_backend_token(backend_token, token_max_age)
+        response.set_cookie("backend_token_ref", token_ref, httponly=True, samesite="lax",
+                             max_age=token_max_age)
+        response.delete_cookie("backend_token")
+    else:
+        delete_backend_token_ref(request.cookies.get("backend_token_ref", ""))
+        response.delete_cookie("backend_token_ref")
+        response.delete_cookie("backend_token")
+    if params:
+        response.set_cookie("ui_params", json.dumps(params), httponly=True, samesite="lax",
+                             max_age=auth.session_duration_minutes * 60)
+    return response
+
+@app.get("/ui/chat", response_class=HTMLResponse)
+async def ui_chat_page(request: Request):
+    """Chat page loaded from config_path query parameter (no slug needed)."""
+    cfg = require_config_path(request)
+    session = get_session(request)
+    cp = request.query_params.get("config_path", "")
+    if not session:
+        params = resolve_params(cfg, request)
+        redirect_qs = dict(params)
+        redirect_qs["config_path"] = cp
+        return RedirectResponse(f"/ui/login?{urlencode(redirect_qs)}", status_code=302)
+    params = resolve_params(cfg, request)
+    missing = get_missing_required_params(cfg, params)
+    ep_display = {}
+    for e in cfg.chat.endpoints:
+        if e.response_display:
+            ep_display[e.name] = [item.model_dump() for item in e.response_display]
+    samples_json = json.dumps([s.model_dump() for s in cfg.chat.samples])
+    missing_params_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
+    return templates.TemplateResponse("chat.html", {
+        "request": request, "cfg": cfg, "slug": UI_SLUG,
+        "logout_url": f"/ui/logout?{request.url.query}",
+        "chat_send_url": f"/ui/chat/send?{request.url.query}",
+        "chat_url": f"/ui/chat?config_path={request.query_params.get('config_path', '')}",
+        "username": session.get("sub", "User"),
+        "endpoints": [e.name for e in cfg.chat.endpoints],
+        "show_endpoint_selector": cfg.chat.show_endpoint_selector,
+        "params": params,
+        "param_configs": cfg.params,
+        "ep_display_json": json.dumps(ep_display),
+        "samples_json": samples_json,
+        "missing_params_error": missing_params_error,
+    })
+
+@app.post("/ui/chat/send")
+async def ui_chat_send(request: Request):
+    """Proxy chat message for config_path-based UI."""
+    cfg = require_config_path(request)
+    session = get_session(request)
+    if not session:
+        raise HTTPException(401, "Not authenticated")
+
+    body = await request.json()
+    user_message = body.get("message", "")
+    endpoint_name = body.get("endpoint", "default")
+
+    params_check = resolve_params(cfg, request)
+    missing = get_missing_required_params(cfg, params_check)
+    if missing:
+        return JSONResponse(
+            {"response": f"Cannot send message: required parameter(s) not set: {', '.join(missing)}. "
+                         "Open the \u2699 Params panel and provide the missing values."},
+            status_code=200,
+        )
+
+    backend_token_ref = request.cookies.get("backend_token_ref", "")
+    backend_token = get_backend_token_by_ref(backend_token_ref) if backend_token_ref else ""
+    if not backend_token:
+        backend_token = request.cookies.get("backend_token", "")
+
+    ep = next((e for e in cfg.chat.endpoints if e.name == endpoint_name), None)
+    if not ep and cfg.chat.endpoints:
+        ep = cfg.chat.endpoints[0]
+    if not ep:
+        return JSONResponse({"response": "No chat endpoint configured."})
+
+    params = resolve_params(cfg, request)
+
+    def substitute(obj, msg: str, token: str, params: Dict[str, str]):
+        if isinstance(obj, str):
+            s = obj.replace("{{message}}", msg).replace("{{token}}", token)
+            for k, v in params.items():
+                s = s.replace("{{param." + k + "}}", v)
+                s = s.replace("{{" + k + "}}", v)
+            return s
+        if isinstance(obj, dict):
+            return {k: substitute(v, msg, token, params) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [substitute(i, msg, token, params) for i in obj]
+        return obj
+
+    req_body = substitute(ep.body_template, user_message, backend_token, params) if ep.body_template else {"query": user_message}
+    req_headers = {k: substitute(v, user_message, backend_token, params) for k, v in ep.headers.items()}
+    req_url = substitute(ep.url, user_message, backend_token, params)
+
+    try:
+        async with httpx.AsyncClient(timeout=60, verify=SSL_VERIFY) as client:
+            resp = await client.request(ep.method, req_url, json=req_body, headers=req_headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            def extract_field(data, field_path: str):
+                val = data
+                for part in field_path.split("."):
+                    if isinstance(val, dict):
+                        val = val.get(part, "")
+                    elif isinstance(val, list) and part.isdigit():
+                        idx = int(part)
+                        val = val[idx] if idx < len(val) else ""
+                    else:
+                        break
+                return val
+            if ep.response_display:
+                display_items = []
+                for item in ep.response_display:
+                    val = extract_field(data, item.field)
+                    display_items.append({"label": item.label or item.field, "type": item.type, "value": val})
+                return JSONResponse({"response": str(extract_field(data, ep.response_field)), "display": display_items})
+            return JSONResponse({"response": str(extract_field(data, ep.response_field))})
+        else:
+            return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})
+    except httpx.RequestError as e:
+        return JSONResponse({"response": f"Could not reach backend: {e}"})
+
+@app.get("/ui/logout")
+async def ui_logout(request: Request):
+    cp = request.query_params.get("config_path", "")
+    response = RedirectResponse(f"/ui/login?config_path={cp}" if cp else "/", status_code=302)
+    delete_backend_token_ref(request.cookies.get("backend_token_ref", ""))
+    response.delete_cookie("session_token")
+    response.delete_cookie("backend_token_ref")
+    response.delete_cookie("backend_token")
+    return response
+
+# ---------------------------------------------------------------------------
+# Routes – /{slug}/login (slug-based, no config_path)
+# ---------------------------------------------------------------------------
 @app.get("/{slug}/login", response_class=HTMLResponse)
 async def login_page(request: Request, slug: str):
     cfg = get_config(slug)
     session = get_session(request)
+    params = resolve_params(cfg, request)
     if session:
-        params = resolve_params(cfg, request)
         qs = urlencode(params) if params else ""
         return RedirectResponse(f"/{slug}/chat?{qs}" if qs else f"/{slug}/chat", status_code=302)
+    missing = get_missing_required_params(cfg, params)
+    param_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
     return templates.TemplateResponse("login.html", {
-        "request": request, "cfg": cfg, "slug": slug, "error": None,
-        "params": resolve_params(cfg, request),
+        "request": request, "cfg": cfg, "slug": slug,
+        "login_action": f"/{slug}/login?{request.url.query}",
+        "error": param_error,
+        "params": params,
     })
 
 @app.post("/{slug}/login")
 async def login_submit(request: Request, slug: str,
                         username: str = Form(...), password: str = Form(...)):
-    cfg = get_config(slug)
+    cfg = get_config_for_request(slug, request)
     auth = cfg.auth
     backend_token = None
     error = None
@@ -685,12 +956,14 @@ async def login_submit(request: Request, slug: str,
 
     if error:
         return templates.TemplateResponse("login.html", {
-            "request": request, "cfg": cfg, "slug": slug, "error": error,
+            "request": request, "cfg": cfg, "slug": slug,
+            "login_action": f"/{slug}/login?{request.url.query}",
+            "error": error,
+            "params": resolve_params(cfg, request),
         })
 
     # Create local session token
     session_token = create_local_token(username, auth.session_duration_minutes)
-    # Collect params from query string
     params = resolve_params(cfg, request)
     qs = urlencode(params) if params else ""
     redirect_url = f"/{slug}/chat?{qs}" if qs else f"/{slug}/chat"
@@ -721,21 +994,30 @@ async def login_submit(request: Request, slug: str,
 # ---------------------------------------------------------------------------
 @app.get("/{slug}/chat", response_class=HTMLResponse)
 async def chat_page(request: Request, slug: str):
-    cfg = get_config(slug)
+    cfg = get_config_for_request(slug, request)
     session = get_session(request)
     if not session:
         params = resolve_params(cfg, request)
-        qs = urlencode(params) if params else ""
+        redirect_qs = dict(params)
+        cp = request.query_params.get("config_path")
+        if cp:
+            redirect_qs["config_path"] = cp
+        qs = urlencode(redirect_qs) if redirect_qs else ""
         return RedirectResponse(f"/{slug}/login?{qs}" if qs else f"/{slug}/login", status_code=302)
     params = resolve_params(cfg, request)
+    missing = get_missing_required_params(cfg, params)
     # Build endpoint display config for JS
     ep_display = {}
     for e in cfg.chat.endpoints:
         if e.response_display:
             ep_display[e.name] = [item.model_dump() for item in e.response_display]
     samples_json = json.dumps([s.model_dump() for s in cfg.chat.samples])
+    missing_params_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
     return templates.TemplateResponse("chat.html", {
         "request": request, "cfg": cfg, "slug": slug,
+        "logout_url": f"/{slug}/logout",
+        "chat_send_url": f"/{slug}/chat/send",
+        "chat_url": f"/{slug}/chat",
         "username": session.get("sub", "User"),
         "endpoints": [e.name for e in cfg.chat.endpoints],
         "show_endpoint_selector": cfg.chat.show_endpoint_selector,
@@ -743,12 +1025,13 @@ async def chat_page(request: Request, slug: str):
         "param_configs": cfg.params,
         "ep_display_json": json.dumps(ep_display),
         "samples_json": samples_json,
+        "missing_params_error": missing_params_error,
     })
 
 @app.post("/{slug}/chat/send")
 async def chat_send(request: Request, slug: str):
     """Proxy a chat message to the configured FD2/backend endpoint."""
-    cfg = get_config(slug)
+    cfg = get_config_for_request(slug, request)
     session = get_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
@@ -756,6 +1039,17 @@ async def chat_send(request: Request, slug: str):
     body = await request.json()
     user_message = body.get("message", "")
     endpoint_name = body.get("endpoint", "default")
+
+    # Validate required params before proxying
+    params_check = resolve_params(cfg, request)
+    missing = get_missing_required_params(cfg, params_check)
+    if missing:
+        return JSONResponse(
+            {"response": f"Cannot send message: required parameter(s) not set: {', '.join(missing)}. "
+                         "Open the ⚙ Params panel and provide the missing values."},
+            status_code=200,
+        )
+
     backend_token_ref = request.cookies.get("backend_token_ref", "")
     backend_token = get_backend_token_by_ref(backend_token_ref) if backend_token_ref else ""
     if not backend_token:
