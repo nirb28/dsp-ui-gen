@@ -1,0 +1,86 @@
+##############################################################################
+# SAS to Python Converter - JWT auth + curated SAS examples
+# Access at: http://localhost:8200/sas2py-conversion/login
+##############################################################################
+name: "SAS to Python Converter"
+description: "Convert SAS snippets to Python (pandas/numpy) with JWT-authenticated backend calls"
+
+params:
+  - name: "project"
+    label: "Project"
+    default: "sas2py"
+
+theme:
+  primary_color: "#0f766e"
+  secondary_color: "#115e59"
+  accent_color: "#14b8a6"
+  background_color: "#f0fdfa"
+  text_color: "#1f2937"
+
+auth:
+  type: "jwt_endpoint"
+  endpoint: "http://127.0.0.1:8080/{{project}}/auth/token"
+  username_field: "username"
+  password_field: "password"
+  token_response_field: "access_token"
+  session_duration_minutes: 480
+
+chat:
+  system_prompt: "You are an expert SAS-to-Python converter. Preserve business logic and explain edge cases briefly."
+  placeholder: "Paste SAS code to convert..."
+  welcome_message: "Paste SAS code and I will convert it to Python using pandas/numpy patterns."
+
+  samples:
+    - label: "PROC MEANS summary"
+      message: |
+        proc means data=sashelp.class n mean min max;
+          var age height weight;
+        run;
+
+    - label: "DATA step with derived column"
+      message: |
+        data work.class_bmi;
+          set sashelp.class;
+          bmi = (weight / (height*height)) * 703;
+        run;
+
+    - label: "PROC SQL filter + sort"
+      message: |
+        proc sql;
+          create table work.adults as
+          select name, age, height, weight
+          from sashelp.class
+          where age >= 14
+          order by age desc;
+        quit;
+
+    - label: "IF/ELSE categorization"
+      message: |
+        data work.segmented;
+          set sashelp.class;
+          length age_band $10;
+          if age < 13 then age_band = "pre-teen";
+          else if age < 16 then age_band = "teen";
+          else age_band = "senior-teen";
+        run;
+
+  input:
+    type: "code"
+    rows: 10
+    max_rows: 22
+    language: "sas"
+    label: "SAS Input"
+    submit_on_enter: false
+
+  show_endpoint_selector: false
+  endpoints:
+    - name: "convert"
+      url: "http://127.0.0.1:8080/{{project}}/convert"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{token}}"
+      body_template:
+        template_name: "converter"
+        user_input: "{{message}}"
+      response_field: "choices.0.message.content"
