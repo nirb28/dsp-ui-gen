@@ -1,0 +1,244 @@
+page:
+  title: "Platform Use Case Showcase"
+  subtitle: "Discover launch-ready AI experiences built on the platform."
+  description: "Curated showcase of demos, copilots, accelerators, and business solutions. Add a new item under cards to publish another use case on the landing page."
+  cta:
+    label: "Request a Demo"
+    url: "/admin"
+
+settings:
+  default_status: "preview"
+  default_badge_style: "subtle"
+  sort_by: "featured_then_title"
+  open_links_in_new_tab: true
+  show_filters: true
+  filters:
+    - "All"
+    - "Chat"
+    - "RAG"
+    - "Analytics"
+    - "Automation"
+    - "Developer Tools"
+    - "Security"
+    - "Customer Experience"
+
+cards:
+  - id: "knowledge-assistant"
+    title: "Knowledge Assistant"
+    tagline: "Enterprise search and answer generation"
+    description: "Search internal knowledge sources, retrieve grounded context, and generate concise answers with citations."
+    category: "RAG"
+    audience:
+      - "Operations"
+      - "Support"
+      - "Internal Users"
+    status: "live"
+    featured: true
+    badge:
+      text: "Popular"
+      style: "success"
+    launch:
+      label: "Launch App"
+      url: "/fd2-rag-chatbot/login"
+    actions:
+      - type: "video"
+        label: "Demo Video"
+        url: "https://example.com/videos/knowledge-assistant"
+        icon: "play-circle"
+      - type: "docs"
+        label: "Solution Docs"
+        url: "https://example.com/docs/knowledge-assistant"
+        icon: "book-open"
+      - type: "repo"
+        label: "Implementation"
+        url: "https://example.com/repos/knowledge-assistant"
+        icon: "code-bracket"
+    highlights:
+      - "Grounded responses with retrieval"
+      - "JWT-secured access"
+      - "Multi-endpoint architecture"
+    metrics:
+      - label: "Sources"
+        value: "5+"
+      - label: "Response Mode"
+        value: "Streaming"
+    tags:
+      - "RAG"
+      - "Search"
+      - "Enterprise"
+    owner:
+      team: "AI Platform"
+      contact: "ai-platform@example.com"
+
+  - id: "multi-endpoint-copilot"
+    title: "Multi-Endpoint Copilot"
+    tagline: "One UI, multiple backend capabilities"
+    description: "Route user requests across specialized endpoints such as retrieval, generation, summarization, and structured workflows."
+    category: "Developer Tools"
+    audience:
+      - "Platform Teams"
+      - "Developers"
+    status: "preview"
+    featured: true
+    badge:
+      text: "New"
+      style: "info"
+    launch:
+      label: "Open Copilot"
+      url: "/fd2-multi-endpoint/login"
+    actions:
+      - type: "docs"
+        label: "Architecture"
+        url: "https://example.com/docs/multi-endpoint-copilot"
+        icon: "squares-2x2"
+      - type: "video"
+        label: "Walkthrough"
+        url: "https://example.com/videos/multi-endpoint-copilot"
+        icon: "video-camera"
+    highlights:
+      - "Endpoint switching"
+      - "Composable orchestration"
+      - "Reusable UI pattern"
+    tags:
+      - "Copilot"
+      - "Routing"
+      - "Platform"
+    owner:
+      team: "UI Generator"
+      contact: "ui-gen@example.com"
+
+  - id: "sas2py-converter"
+    title: "SAS to Python Converter"
+    tagline: "Accelerate analytics modernization"
+    description: "Convert SAS workflows into maintainable Python implementations with guided prompts, review steps, and reusable output patterns."
+    category: "Analytics"
+    audience:
+      - "Data Engineering"
+      - "Analytics"
+    status: "live"
+    featured: false
+    badge:
+      text: "Accelerator"
+      style: "warning"
+    launch:
+      label: "Start Conversion"
+      url: "/sas2py-conversion/login"
+    actions:
+      - type: "docs"
+        label: "Migration Guide"
+        url: "https://example.com/docs/sas2py"
+        icon: "document-text"
+      - type: "video"
+        label: "Overview"
+        url: "https://example.com/videos/sas2py"
+        icon: "play"
+    highlights:
+      - "Code modernization"
+      - "Prompt-driven workflow"
+      - "Reusable output templates"
+    tags:
+      - "Modernization"
+      - "Data"
+      - "Python"
+
+  - id: "metadata-generator"
+    title: "Column Metadata Generator"
+    tagline: "Automate schema understanding"
+    description: "Generate business-friendly metadata, descriptions, and semantic labels for database columns to improve discovery and governance."
+    category: "Automation"
+    audience:
+      - "Data Governance"
+      - "BI Teams"
+      - "Analysts"
+    status: "pilot"
+    featured: false
+    badge:
+      text: "Pilot"
+      style: "subtle"
+    launch:
+      label: "Generate Metadata"
+      url: "/db-column-metadata-gen/login"
+    actions:
+      - type: "docs"
+        label: "Reference"
+        url: "https://example.com/docs/db-column-metadata"
+        icon: "table-cells"
+      - type: "video"
+        label: "Use Case Demo"
+        url: "https://example.com/videos/db-column-metadata"
+        icon: "film"
+    highlights:
+      - "Schema summarization"
+      - "Semantic enrichment"
+      - "Governance support"
+    tags:
+      - "Metadata"
+      - "Automation"
+      - "Data Catalog"
+
+  - id: "enterprise-chat"
+    title: "Enterprise Chat"
+    tagline: "Secure internal assistant experience"
+    description: "Provide a branded internal chat experience with enterprise authentication, role-aware access, and controlled backend connectivity."
+    category: "Security"
+    audience:
+      - "Employees"
+      - "IT"
+      - "Security"
+    status: "live"
+    featured: false
+    badge:
+      text: "SSO Ready"
+      style: "success"
+    launch:
+      label: "Open Chat"
+      url: "/ldap-enterprise-chat/login"
+    actions:
+      - type: "docs"
+        label: "Security Docs"
+        url: "https://example.com/docs/enterprise-chat"
+        icon: "shield-check"
+      - type: "faq"
+        label: "FAQ"
+        url: "https://example.com/faq/enterprise-chat"
+        icon: "question-mark-circle"
+    highlights:
+      - "LDAP integration"
+      - "Branded experience"
+      - "Access-controlled usage"
+    tags:
+      - "Enterprise"
+      - "Chat"
+      - "Authentication"
+
+schema_notes:
+  required_card_fields:
+    - "id"
+    - "title"
+    - "description"
+    - "launch.label"
+    - "launch.url"
+  optional_sections:
+    - "tagline"
+    - "badge"
+    - "actions"
+    - "highlights"
+    - "metrics"
+    - "owner"
+    - "tags"
+    - "audience"
+  supported_action_types:
+    - "launch"
+    - "video"
+    - "docs"
+    - "repo"
+    - "faq"
+    - "dashboard"
+    - "api"
+    - "contact"
+  suggested_extra_fields:
+    - "estimated_value"
+    - "last_updated"
+    - "demo_credentials_hint"
+    - "availability"
+    - "compliance"
