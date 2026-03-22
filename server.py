@@ -88,6 +88,7 @@ class ChatConfig(BaseModel):
     system_prompt: str = "You are a helpful AI assistant."
     placeholder: str = "Type your message..."
     welcome_message: str = "Hello! How can I help you today?"
+    template: str = "chat.html"
     input: InputConfig = InputConfig()      # input control configuration
     endpoints: list[ChatEndpoint] = []
     show_endpoint_selector: bool = False    # let user pick endpoint in UI
@@ -625,6 +626,20 @@ def get_config_for_request(slug: str, request: Request) -> AppConfig:
     return get_config(slug)
 
 
+def resolve_chat_template(cfg: AppConfig) -> str:
+    """Resolve the chat template name while preventing path traversal."""
+    template_name = cfg.chat.template or "chat.html"
+    if "/" in template_name or "\\" in template_name or ".." in template_name:
+        raise HTTPException(400, "Invalid chat template name")
+    template_path = Path(template_name)
+    if template_path.suffix.lower() != ".html":
+        template_name = f"{template_name}.html"
+    resolved_path = BASE_DIR / "templates" / template_name
+    if not resolved_path.exists():
+        raise HTTPException(400, f"Chat template not found: {template_name}")
+    return template_name
+
+
 def require_config_path(request: Request) -> AppConfig:
     """Load AppConfig from the required config_path query parameter."""
     config_path = request.query_params.get("config_path")
@@ -740,6 +755,7 @@ async def ui_chat_page(request: Request):
     """Chat page loaded from config_path query parameter (no slug needed)."""
     cfg = require_config_path(request)
     session = get_session(request)
+    template_name = resolve_chat_template(cfg)
     cp = request.query_params.get("config_path", "")
     if not session:
         params = resolve_params(cfg, request)
@@ -754,7 +770,7 @@ async def ui_chat_page(request: Request):
             ep_display[e.name] = [item.model_dump() for item in e.response_display]
     samples_json = json.dumps([s.model_dump() for s in cfg.chat.samples])
     missing_params_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
-    return templates.TemplateResponse("chat.html", {
+    return templates.TemplateResponse(template_name, {
         "request": request, "cfg": cfg, "slug": UI_SLUG,
         "logout_url": f"/ui/logout?{request.url.query}",
         "chat_send_url": f"/ui/chat/send?{request.url.query}",
@@ -840,9 +856,10 @@ async def ui_chat_send(request: Request):
                 display_items = []
                 for item in ep.response_display:
                     val = extract_field(data, item.field)
-                    display_items.append({"label": item.label or item.field, "type": item.type, "value": val})
-                return JSONResponse({"response": str(extract_field(data, ep.response_field)), "display": display_items})
-            return JSONResponse({"response": str(extract_field(data, ep.response_field))})
+                    display_items.append({"field": item.field, "label": item.label or item.field, "type": item.type, "value": val})
+                return JSONResponse({"response": str(extract_field(data, ep.response_field)), "display": display_items, "payload": data})
+            answer = extract_field(data, ep.response_field)
+            return JSONResponse({"response": str(answer), "payload": data})
         else:
             return JSONResponse({"response": f"Backend error (HTTP {resp.status_code}): {resp.text[:300]}"})
     except httpx.RequestError as e:
@@ -996,6 +1013,7 @@ async def login_submit(request: Request, slug: str,
 async def chat_page(request: Request, slug: str):
     cfg = get_config_for_request(slug, request)
     session = get_session(request)
+    template_name = resolve_chat_template(cfg)
     if not session:
         params = resolve_params(cfg, request)
         redirect_qs = dict(params)
@@ -1013,7 +1031,7 @@ async def chat_page(request: Request, slug: str):
             ep_display[e.name] = [item.model_dump() for item in e.response_display]
     samples_json = json.dumps([s.model_dump() for s in cfg.chat.samples])
     missing_params_error = f"Required parameter(s) not set: {', '.join(missing)}" if missing else None
-    return templates.TemplateResponse("chat.html", {
+    return templates.TemplateResponse(template_name, {
         "request": request, "cfg": cfg, "slug": slug,
         "logout_url": f"/{slug}/logout",
         "chat_send_url": f"/{slug}/chat/send",
@@ -1137,11 +1155,12 @@ async def chat_send(request: Request, slug: str):
                 for item in ep.response_display:
                     val = extract_field(data, item.field)
                     display_items.append({
+                        "field": item.field,
                         "label": item.label or item.field,
                         "type": item.type,
                         "value": val,
                     })
-                result = {"response": str(extract_field(data, ep.response_field)), "display": display_items}
+                result = {"response": str(extract_field(data, ep.response_field)), "display": display_items, "payload": data}
                 if TRACE_ENABLED:
                     result["trace"] = {
                         "request": _mask_token_in_trace(trace_request),
@@ -1150,7 +1169,7 @@ async def chat_send(request: Request, slug: str):
                 return JSONResponse(result)
 
             answer = extract_field(data, ep.response_field)
-            result = {"response": str(answer)}
+            result = {"response": str(answer), "payload": data}
             if TRACE_ENABLED:
                 result["trace"] = {
                     "request": _mask_token_in_trace(trace_request),
@@ -1193,4 +1212,4 @@ async def logout(request: Request, slug: str):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8200, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8300, reload=True)

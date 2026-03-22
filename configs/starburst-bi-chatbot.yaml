@@ -1,0 +1,82 @@
+name: "Starburst BI Chatbot"
+description: "Structured BI chat UI for normalized ADK2 Starburst graph responses"
+
+params:
+  - name: "adk_base_url"
+    label: "ADK Base URL"
+    default: "http://localhost:8100"
+  - name: "metadata_file"
+    label: "Metadata File"
+    default: "burstbank_semantic.yaml"
+  - name: "catalog"
+    label: "Catalog"
+    default: "burst_bank"
+  - name: "schema"
+    label: "Schema"
+    default: "public"
+  - name: "limit"
+    label: "Result Limit"
+    default: "100"
+
+theme:
+  primary_color: "#0f766e"
+  secondary_color: "#115e59"
+  accent_color: "#14b8a6"
+  background_color: "#f8fafc"
+  text_color: "#0f172a"
+
+auth:
+  type: "simple"
+  session_duration_minutes: 480
+
+chat:
+  template: "starburst_bi_chat.html"
+  system_prompt: "You are a Starburst BI assistant."
+  placeholder: "Ask a BI question, for example: What are the top 10 customers by balance this month?"
+  welcome_message: "Ask a business question and I’ll return the summary, SQL, result table, visualization, and execution trace."
+  input:
+    type: "multiline"
+    rows: 2
+    max_rows: 8
+    submit_on_enter: false
+  show_endpoint_selector: false
+  endpoints:
+    - name: "starburst-bi"
+      url: "{{param.adk_base_url}}/execute/graph/normalized"
+      method: "POST"
+      body_template:
+        graph_id: "starburst-ai-bi-chatbot"
+        input:
+          user_question: "{{message}}"
+          conversation_history: []
+          metadata_file: "{{param.metadata_file}}"
+          include_live_schema: false
+          catalog: "{{param.catalog}}"
+          schema: "{{param.schema}}"
+          limit: "{{param.limit}}"
+          output_format: "html"
+        context: {}
+      response_field: "normalized.summary.markdown"
+      response_display:
+        - field: "normalized.summary.markdown"
+          label: "Summary"
+          type: "markdown"
+        - field: "normalized.results.rows"
+          label: "Results"
+          type: "table"
+        - field: "normalized.sql.safe"
+          label: "SQL"
+          type: "code"
+        - field: "normalized.visualization.artifact"
+          label: "Visualization"
+          type: "json"
+        - field: "normalized.diagnostics"
+          label: "Diagnostics"
+          type: "json"
+  samples:
+    - label: "Top customers by balance"
+      message: "Show the top 10 customers by total balance."
+    - label: "Accounts by status"
+      message: "How many accounts do we have by account status?"
+    - label: "Recent transaction trend"
+      message: "Show the daily transaction count trend for the last 30 days."
