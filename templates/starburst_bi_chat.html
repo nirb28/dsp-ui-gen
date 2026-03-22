@@ -183,8 +183,19 @@ function copyText(text, btn) {
 function resolveArtifactUrl(url) {
     if (!url) return '';
     if (/^https?:\/\//i.test(url)) return url;
+    if (url.includes('\\') || /^([A-Za-z]:)?[\\/]/.test(url) || /(?:^|\/|\\)(analyses|visualizations)(?:\/|\\)/i.test(url)) {
+        const normalized = String(url).replace(/\\/g, '/');
+        const parts = normalized.split('/');
+        const fileName = parts[parts.length - 1] || '';
+        if (/\/analyses\//i.test(normalized) || /\.json$/i.test(fileName)) {
+            url = `/execute/artifacts/analysis/${fileName}`;
+        } else if (/\/visualizations\//i.test(normalized) || /\.(html|png|jpg|jpeg|svg|webp)$/i.test(fileName)) {
+            url = `/execute/artifacts/visualization/${fileName}`;
+        }
+    }
     const base = (ADK_BASE_URL || '').replace(/\/$/, '');
-    return base ? `${base}${url}` : url;
+    const path = String(url).replace(/\\/g, '/');
+    return base ? `${base}${path.startsWith('/') ? '' : '/'}${path}` : path;
 }
 
 function renderKeyValueTable(obj) {
@@ -215,10 +226,13 @@ function renderDiagnostics(diag) {
 
 function renderVisualization(viz) {
     if (!viz || typeof viz !== 'object') return '';
-    const artifactUrl = resolveArtifactUrl(viz.artifact_url);
-    const artifact = viz.artifact || {};
+    const artifact = viz.artifact || viz;
+    const artifactUrl = resolveArtifactUrl(viz.artifact_url || viz.output_path || artifact.output_path);
+    const outputFormat = String((artifact && artifact.output_format) || viz.output_format || '').toLowerCase();
+    const isAvailable = typeof viz.available === 'boolean' ? viz.available : Boolean(artifactUrl || artifact.output_path);
+    const isRecommended = typeof viz.recommended === 'boolean' ? viz.recommended : Boolean(viz.chart_type || artifact.chart_type);
     let embed = '<div class="text-sm text-slate-500">No visualization artifact generated.</div>';
-    if (artifactUrl && String(artifact.output_format || '').toLowerCase() === 'html') {
+    if (artifactUrl && outputFormat === 'html') {
         embed = `<iframe src="${escapeHtml(artifactUrl)}" class="w-full h-[420px] rounded-xl border border-slate-200 bg-white"></iframe>`;
     } else if (artifactUrl) {
         embed = `<a href="${escapeHtml(artifactUrl)}" target="_blank" rel="noopener" class="text-sm text-blue-600 hover:underline">Open visualization artifact</a>`;
@@ -227,11 +241,11 @@ function renderVisualization(viz) {
         <div class="panel p-4 space-y-4">
             <div class="flex flex-wrap items-center gap-2">
                 <div class="panel-title">Visualization</div>
-                <span class="${viz.available ? 'pill pill-ok' : 'pill pill-muted'}">${viz.available ? 'Generated' : 'Not generated'}</span>
-                <span class="${viz.recommended ? 'pill pill-warn' : 'pill pill-muted'}">${viz.recommended ? 'Recommended' : 'Optional'}</span>
+                <span class="${isAvailable ? 'pill pill-ok' : 'pill pill-muted'}">${isAvailable ? 'Generated' : 'Not generated'}</span>
+                <span class="${isRecommended ? 'pill pill-warn' : 'pill pill-muted'}">${isRecommended ? 'Recommended' : 'Optional'}</span>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div class="metric-card p-3"><div class="panel-title mb-1">Chart</div><div class="text-sm font-semibold text-slate-800">${escapeHtml(viz.chart_type || 'n/a')}</div></div>
+                <div class="metric-card p-3"><div class="panel-title mb-1">Chart</div><div class="text-sm font-semibold text-slate-800">${escapeHtml(viz.chart_type || artifact.chart_type || 'n/a')}</div></div>
                 <div class="metric-card p-3"><div class="panel-title mb-1">X</div><div class="text-sm font-semibold text-slate-800">${escapeHtml((artifact && artifact.x) || (viz.recommendation && viz.recommendation.x) || 'n/a')}</div></div>
                 <div class="metric-card p-3"><div class="panel-title mb-1">Y</div><div class="text-sm font-semibold text-slate-800">${escapeHtml((artifact && artifact.y) || (viz.recommendation && viz.recommendation.y) || 'n/a')}</div></div>
                 <div class="metric-card p-3"><div class="panel-title mb-1">Rows</div><div class="text-sm font-semibold text-slate-800">${escapeHtml((artifact && artifact.rows) || '')}</div></div>
